@@ -29,6 +29,8 @@ let camPitch = 0.22;
 let shake = 0;
 let mission;
 let interact = null;
+let pauseReason = null;
+let resumeGraceUntil = 0;
 const aimDir = new THREE.Vector3();
 const camTarget = new THREE.Vector3();
 const tmp = new THREE.Vector3();
@@ -82,7 +84,6 @@ async function boot() {
     resize();
     window.addEventListener("resize", resize);
     document.addEventListener("visibilitychange", onVis);
-    window.addEventListener("blur", () => { if (mode === "play") pause("tab"); });
     $("load-status").textContent = "District ready.";
     $("screen-load").hidden = true;
     $("screen-start").hidden = false;
@@ -172,9 +173,13 @@ function bindUi() {
     sfx.unlock();
     $("screen-start").hidden = true;
     $("hud").hidden = false;
-    mode = "play";
-    input.blocked = false;
-    if (!matchMedia("(pointer: coarse)").matches) $("view").requestPointerLock?.();
+    if (isPortrait()) {
+      mode = "pause";
+      pauseReason = "portrait";
+      $("portrait").hidden = false;
+      return;
+    }
+    beginPlay();
   };
   $("btn-resume").onclick = resume;
   $("btn-unpause-vis").onclick = resume;
@@ -199,37 +204,51 @@ function bindUi() {
   });
 }
 
+function beginPlay() {
+  $("screen-start").hidden = true;
+  $("screen-pause").hidden = true;
+  $("resume-lock").hidden = true;
+  $("portrait").hidden = true;
+  $("hud").hidden = false;
+  mode = "play";
+  pauseReason = null;
+  input.blocked = false;
+  resumeGraceUntil = performance.now() + 900;
+  if (clock) clock.getDelta();
+}
+
 function restart() {
   $("screen-end").hidden = true;
   $("screen-pause").hidden = true;
   $("resume-lock").hidden = true;
   resetMission();
   sfx.unlock();
-  $("hud").hidden = false;
-  mode = "play";
-  input.blocked = false;
+  beginPlay();
 }
 
 function pause(reason) {
   if (mode !== "play") return;
+  if (reason === "tab" && performance.now() < resumeGraceUntil) return;
   mode = "pause";
+  pauseReason = reason;
   input.blocked = true;
   input.clearHeld();
-  if (reason === "tab") {
-    $("resume-lock").hidden = false;
-  } else {
-    $("screen-pause").hidden = false;
-  }
+  if (reason === "tab") $("resume-lock").hidden = false;
+  else $("screen-pause").hidden = false;
   document.exitPointerLock?.();
 }
 
 function resume() {
-  if (isPortrait()) return;
-  $("screen-pause").hidden = true;
-  $("resume-lock").hidden = true;
-  mode = "play";
-  input.blocked = false;
-  clock.getDelta();
+  sfx.unlock();
+  if (isPortrait()) {
+    $("resume-lock").hidden = true;
+    $("screen-pause").hidden = true;
+    $("portrait").hidden = false;
+    mode = "pause";
+    pauseReason = "portrait";
+    return;
+  }
+  beginPlay();
 }
 
 function onVis() {
@@ -244,8 +263,24 @@ function loop() {
   requestAnimationFrame(loop);
   const dt = Math.min(clock.getDelta(), 0.05);
   const portrait = isPortrait();
-  $("portrait").hidden = !portrait;
-  if (portrait && mode === "play") pause("tab");
+  if (portrait && (mode === "play" || mode === "pause")) {
+    if (mode === "play") {
+      mode = "pause";
+      input.blocked = true;
+      input.clearHeld();
+      document.exitPointerLock?.();
+    }
+    pauseReason = "portrait";
+    $("portrait").hidden = false;
+    $("resume-lock").hidden = true;
+  } else if (!portrait && pauseReason === "portrait") {
+    $("portrait").hidden = true;
+    $("resume-lock").hidden = false;
+    mode = "pause";
+    pauseReason = "tab";
+  } else {
+    $("portrait").hidden = true;
+  }
   if (mode === "play") update(dt);
   else if (ghost) animateGhost(ghost.parts, player?.state || "idle", clock.elapsedTime, false);
   renderer.render(scene, camera);
