@@ -4,8 +4,8 @@ export function createWorld(scene, quality) {
   const colliders = [];
   const lights = [];
 
-  scene.background = new THREE.Color(0x0b121c);
-  scene.fog = new THREE.FogExp2(0x0b121c, quality === "low" ? 0.034 : 0.026);
+  scene.background = new THREE.Color(0x9aa7b5);
+  scene.fog = new THREE.Fog(0x9aa7b5, 28, 78);
 
   const groundTex = makeNoise();
   const ground = new THREE.Mesh(
@@ -22,9 +22,9 @@ export function createWorld(scene, quality) {
   ground.receiveShadow = true;
   scene.add(ground);
 
-  const hemi = new THREE.HemisphereLight(0xb7d7ee, 0x2a241c, 1.15);
+  const hemi = new THREE.HemisphereLight(0xf4f7fb, 0x8d8680, 1.6);
   scene.add(hemi);
-  const moon = new THREE.DirectionalLight(0xd5e4f4, quality === "low" ? 1.15 : 1.45);
+  const moon = new THREE.DirectionalLight(0xffffff, 1.35);
   moon.position.set(-12, 28, 10);
   if (quality !== "low") {
     moon.castShadow = true;

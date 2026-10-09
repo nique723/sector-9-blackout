@@ -68,7 +68,7 @@ async function boot() {
     renderer = new THREE.WebGLRenderer({ canvas: $("view"), antialias: quality !== "low", powerPreference: "high-performance" });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.35;
+    renderer.toneMappingExposure = 1.05;
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(58, 1, 0.1, 120);
     aimRay = new THREE.Raycaster();
@@ -388,8 +388,8 @@ function update(dt) {
 }
 
 function updateCamera(dt) {
-  const shoulder = 0.78;
-  const dist = 4.6;
+  const shoulder = 1.45;
+  const dist = 3.7;
   const forward = new THREE.Vector3(Math.sin(camYaw), 0, Math.cos(camYaw));
   const right = new THREE.Vector3(forward.z, 0, -forward.x);
   const lookDir = new THREE.Vector3(
@@ -397,11 +397,12 @@ function updateCamera(dt) {
     Math.sin(camPitch),
     Math.cos(camYaw) * Math.cos(camPitch)
   );
-  const head = player.pos.clone().add(new THREE.Vector3(0, 1.5, 0));
+  const head = player.pos.clone().add(new THREE.Vector3(0, 1.45, 0));
+  const aim = head.clone().addScaledVector(lookDir, 16);
   const desired = head.clone()
     .addScaledVector(forward, -dist)
     .addScaledVector(right, shoulder)
-    .add(new THREE.Vector3(0, 0.55 - camPitch * 1.1, 0));
+    .add(new THREE.Vector3(0, 0.42, 0));
   const dir = desired.clone().sub(head);
   const len = dir.length();
   dir.normalize();
@@ -414,8 +415,7 @@ function updateCamera(dt) {
     shake = Math.max(0, shake - dt * 1.4);
   }
   camera.position.lerp(camTarget, 1 - Math.pow(0.001, dt));
-  const focus = head.clone().addScaledVector(lookDir, 12);
-  camera.lookAt(focus);
+  camera.lookAt(aim);
   camera.getWorldDirection(aimDir);
 }
 
