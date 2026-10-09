@@ -302,7 +302,19 @@ label { display: block; margin: 10px 0; font-size: 14px; }
 input[type="range"], select { width: 100%; margin-top: 4px; }
 .check { display: flex; gap: 8px; align-items: center; }
 
-.screen, #portrait, #resume-lock { z-index: 20; }
+#build-stamp {
+  position: absolute;
+  z-index: 30;
+  top: calc(8px + var(--safe-t));
+  left: calc(8px + var(--safe-l));
+  font: 700 12px/1 ui-monospace, monospace;
+  letter-spacing: 0.08em;
+  color: #9fffe8;
+  background: rgba(0,0,0,0.55);
+  padding: 4px 6px;
+  border-radius: 6px;
+  pointer-events: none;
+}
 
 #portrait, #resume-lock {
   position: absolute;

@@ -183,9 +183,8 @@ function bindUi() {
     beginPlay();
   };
   $("btn-resume").onclick = resume;
-  $("btn-unpause-vis").onclick = resume;
-  $("btn-force-play").onclick = resume;
-  $("btn-unpause-vis").addEventListener("pointerup", (e) => { e.preventDefault(); resume(); });
+  const force = $("btn-force-play");
+  if (force) force.onclick = resume;
   $("btn-restart").onclick = restart;
   $("btn-again").onclick = restart;
   $("sens").value = settings.sensitivity;
@@ -210,7 +209,9 @@ function bindUi() {
 function beginPlay() {
   $("screen-start").hidden = true;
   $("screen-pause").hidden = true;
-  $("resume-lock").hidden = true;
+  const lock = $("resume-lock");
+  if (lock) lock.hidden = true;
+  $("portrait").hidden = true;
   $("portrait").hidden = true;
   $("hud").hidden = false;
   mode = "play";
@@ -225,7 +226,9 @@ function beginPlay() {
 function restart() {
   $("screen-end").hidden = true;
   $("screen-pause").hidden = true;
-  $("resume-lock").hidden = true;
+  const lock = $("resume-lock");
+  if (lock) lock.hidden = true;
+  $("portrait").hidden = true;
   resetMission();
   sfx.unlock();
   beginPlay();
@@ -259,7 +262,9 @@ function loop() {
   requestAnimationFrame(loop);
   const dt = Math.min(clock.getDelta(), 0.05);
   $("portrait").hidden = true;
-  $("resume-lock").hidden = true;
+  const lock = $("resume-lock");
+  if (lock) lock.hidden = true;
+  $("portrait").hidden = true;
   if (mode === "play" || window.__s9Enter) {
     if (window.__s9Enter && mode !== "play") beginPlay();
     update(dt);
