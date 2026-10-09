@@ -302,6 +302,8 @@ label { display: block; margin: 10px 0; font-size: 14px; }
 input[type="range"], select { width: 100%; margin-top: 4px; }
 .check { display: flex; gap: 8px; align-items: center; }
 
+.screen, #portrait, #resume-lock { z-index: 20; }
+
 #portrait, #resume-lock {
   position: absolute;
   inset: 0;

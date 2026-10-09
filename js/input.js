@@ -83,11 +83,10 @@ export class Input {
 
     buttons.forEach((btn) => {
       btn.addEventListener("pointerdown", down);
-      btn.addEventListener("pointermove", move);
-      btn.addEventListener("pointerup", up);
-      btn.addEventListener("pointercancel", up);
-      btn.addEventListener("lostpointercapture", up);
     });
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
 
     canvas.addEventListener("pointerdown", (e) => {
       if (this.blocked || e.target !== canvas) return;
@@ -98,10 +97,6 @@ export class Input {
       this.pointers.set(e.pointerId, { role: "aim", el: canvas, x: e.clientX, y: e.clientY });
       e.preventDefault();
     });
-    canvas.addEventListener("pointermove", move);
-    canvas.addEventListener("pointerup", up);
-    canvas.addEventListener("pointercancel", up);
-    canvas.addEventListener("lostpointercapture", up);
 
     window.addEventListener("keydown", (e) => {
       if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();

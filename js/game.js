@@ -278,7 +278,10 @@ function loop() {
   } else {
     $("portrait").hidden = true;
   }
-  if (mode === "play") update(dt);
+  if (mode === "play" || window.__s9Enter) {
+    if (window.__s9Enter && mode !== "play") beginPlay();
+    update(dt);
+  }
   else if (ghost) animateGhost(ghost.parts, player?.state || "idle", clock.elapsedTime, false);
   renderer.render(scene, camera);
   if (fpsOn) {
