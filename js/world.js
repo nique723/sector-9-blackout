@@ -268,8 +268,8 @@ export function resolve(pos, radius, colliders) {
       }
     }
   }
-  pos.x = Math.max(-36, Math.min(36, pos.x));
-  pos.z = Math.max(-44, Math.min(36, pos.z));
+  pos.x = Math.max(-9.3, Math.min(9.3, pos.x));
+  pos.z = Math.max(-35.2, Math.min(37.2, pos.z));
 }
 
 export function blocked(pos, dir, dist, radius, colliders) {

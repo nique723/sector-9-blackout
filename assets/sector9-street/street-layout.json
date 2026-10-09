@@ -1,0 +1,241 @@
+{
+  "units": "meters",
+  "up": "Y",
+  "forward": "-Z",
+  "spawn": [
+    0,
+    0,
+    30
+  ],
+  "tower": [
+    0,
+    0,
+    -38
+  ],
+  "bounds": {
+    "minX": -9.5,
+    "maxX": 9.5,
+    "minZ": -35.5,
+    "maxZ": 38
+  },
+  "colliders": [
+    {
+      "name": "building",
+      "minX": -18.0,
+      "maxX": -10.0,
+      "minY": 0.0,
+      "maxY": 13.0,
+      "minZ": 19.0,
+      "maxZ": 35.0
+    },
+    {
+      "name": "building",
+      "minX": -18.0,
+      "maxX": -10.0,
+      "minY": 0.0,
+      "maxY": 17.0,
+      "minZ": 0.0,
+      "maxZ": 16.0
+    },
+    {
+      "name": "building",
+      "minX": -18.0,
+      "maxX": -10.0,
+      "minY": 0.0,
+      "maxY": 15.0,
+      "minZ": -24.0,
+      "maxZ": -4.0
+    },
+    {
+      "name": "building",
+      "minX": -18.0,
+      "maxX": -10.0,
+      "minY": 0.0,
+      "maxY": 20.0,
+      "minZ": -41.0,
+      "maxZ": -27.0
+    },
+    {
+      "name": "building",
+      "minX": 10.0,
+      "maxX": 18.0,
+      "minY": 0.0,
+      "maxY": 17.0,
+      "minZ": 19.0,
+      "maxZ": 35.0
+    },
+    {
+      "name": "building",
+      "minX": 10.0,
+      "maxX": 18.0,
+      "minY": 0.0,
+      "maxY": 15.0,
+      "minZ": 0.0,
+      "maxZ": 16.0
+    },
+    {
+      "name": "building",
+      "minX": 10.0,
+      "maxX": 18.0,
+      "minY": 0.0,
+      "maxY": 20.0,
+      "minZ": -24.0,
+      "maxZ": -4.0
+    },
+    {
+      "name": "building",
+      "minX": 10.0,
+      "maxX": 18.0,
+      "minY": 0.0,
+      "maxY": 13.0,
+      "minZ": -41.0,
+      "maxZ": -27.0
+    },
+    {
+      "name": "barricade",
+      "minX": -5.35,
+      "maxX": -3.0500000000000003,
+      "minY": 0.0050000000000000044,
+      "maxY": 1.1549999999999998,
+      "minZ": 16.725,
+      "maxZ": 17.275
+    },
+    {
+      "name": "barricade",
+      "minX": 3.0500000000000003,
+      "maxX": 5.35,
+      "minY": 0.0050000000000000044,
+      "maxY": 1.1549999999999998,
+      "minZ": 3.725,
+      "maxZ": 4.275
+    },
+    {
+      "name": "barricade",
+      "minX": -5.35,
+      "maxX": -3.0500000000000003,
+      "minY": 0.0050000000000000044,
+      "maxY": 1.1549999999999998,
+      "minZ": -15.275,
+      "maxZ": -14.725
+    },
+    {
+      "name": "dumpster",
+      "minX": -8.65,
+      "maxX": -7.35,
+      "minY": 0.07499999999999996,
+      "maxY": 1.325,
+      "minZ": 16.0,
+      "maxZ": 18.0
+    },
+    {
+      "name": "dumpster",
+      "minX": 7.35,
+      "maxX": 8.65,
+      "minY": 0.07499999999999996,
+      "maxY": 1.325,
+      "minZ": -6.0,
+      "maxZ": -4.0
+    },
+    {
+      "name": "dumpster",
+      "minX": -8.65,
+      "maxX": -7.35,
+      "minY": 0.07499999999999996,
+      "maxY": 1.325,
+      "minZ": -27.0,
+      "maxZ": -25.0
+    },
+    {
+      "name": "tower base",
+      "minX": -2.3,
+      "maxX": 2.3,
+      "minY": 0.0,
+      "maxY": 2.8,
+      "minZ": -40.0,
+      "maxZ": -36.0
+    }
+  ],
+  "lights": [
+    {
+      "position": [
+        -5.5,
+        5.15,
+        -29
+      ],
+      "color": "#ffd0a0",
+      "intensity": 24,
+      "distance": 13
+    },
+    {
+      "position": [
+        -5.5,
+        5.15,
+        -12
+      ],
+      "color": "#ffd0a0",
+      "intensity": 24,
+      "distance": 13
+    },
+    {
+      "position": [
+        -5.5,
+        5.15,
+        6
+      ],
+      "color": "#ffd0a0",
+      "intensity": 24,
+      "distance": 13
+    },
+    {
+      "position": [
+        -5.5,
+        5.15,
+        24
+      ],
+      "color": "#ffd0a0",
+      "intensity": 24,
+      "distance": 13
+    },
+    {
+      "position": [
+        5.5,
+        5.15,
+        -29
+      ],
+      "color": "#ffd0a0",
+      "intensity": 24,
+      "distance": 13
+    },
+    {
+      "position": [
+        5.5,
+        5.15,
+        -12
+      ],
+      "color": "#ffd0a0",
+      "intensity": 24,
+      "distance": 13
+    },
+    {
+      "position": [
+        5.5,
+        5.15,
+        6
+      ],
+      "color": "#ffd0a0",
+      "intensity": 24,
+      "distance": 13
+    },
+    {
+      "position": [
+        5.5,
+        5.15,
+        24
+      ],
+      "color": "#ffd0a0",
+      "intensity": 24,
+      "distance": 13
+    }
+  ],
+  "notes": "Static environment only. Simplified AABB collision data; no character, enemies, or gameplay included."
+}

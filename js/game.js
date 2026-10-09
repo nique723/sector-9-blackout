@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { Sfx } from "./audio.js";
 import { Input } from "./input.js";
-import { createWorld, makeCell, makePickup, resolve, blocked, segmentClear, rayHit } from "./world.js";
+import { makeCell, makePickup, resolve, blocked, segmentClear, rayHit } from "./world.js";
+import { loadSector9Street } from "./load-street.js";
 import { createGhost, applyFace, animateGhost, createEnemy, animateEnemy } from "./actors.js";
 
 const $ = (id) => document.getElementById(id);
@@ -40,9 +41,9 @@ let aimRay = null;
 let aimNdc = null;
 
 const CELL_SPOTS = [
-  { id: "c1", pos: new THREE.Vector3(-18, 0, 2) },
-  { id: "c2", pos: new THREE.Vector3(18, 0, -2) },
-  { id: "c3", pos: new THREE.Vector3(0, 0, -26) }
+  { id: "c1", pos: new THREE.Vector3(-7, 0, 14) },
+  { id: "c2", pos: new THREE.Vector3(7, 0, 0) },
+  { id: "c3", pos: new THREE.Vector3(0, 0, -27) }
 ];
 
 function loadSettings() {
@@ -64,18 +65,18 @@ function saveSettings() {
 
 async function boot() {
   try {
-    $("load-status").textContent = "Spinning up WebGL…";
+    $("load-status").textContent = "Loading Sector 9 street…";
     renderer = new THREE.WebGLRenderer({ canvas: $("view"), antialias: quality !== "low", powerPreference: "high-performance" });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
     scene = new THREE.Scene();
-    camera = new THREE.PerspectiveCamera(58, 1, 0.1, 120);
+    camera = new THREE.PerspectiveCamera(58, 1, 0.1, 160);
     aimRay = new THREE.Raycaster();
     aimNdc = new THREE.Vector2();
     clock = new THREE.Clock();
     applyQuality();
-    world = createWorld(scene, quality);
+    world = await loadSector9Street(scene, "assets/sector9-street/");
     ghost = createGhost();
     applyFace(ghost.parts);
     scene.add(ghost.group);
@@ -125,7 +126,7 @@ function resetMission() {
     if (child.userData && child.userData.ephemeral) scene.remove(child);
   }
   player = {
-    pos: new THREE.Vector3(0, 0, 26),
+    pos: new THREE.Vector3(0, 0, 30),
     yaw: Math.PI,
     hp: 100,
     mag: MAG,
@@ -163,8 +164,8 @@ function resetMission() {
     item.mesh.userData.ephemeral = true;
     pickups.push(item);
   });
-  pickups.push(tag(makePickup(scene, new THREE.Vector3(6, 0, 14), "ammo")));
-  pickups.push(tag(makePickup(scene, new THREE.Vector3(-6, 0, -10), "health")));
+  pickups.push(tag(makePickup(scene, new THREE.Vector3(6, 0, 22), "ammo")));
+  pickups.push(tag(makePickup(scene, new THREE.Vector3(-6, 0, -12), "health")));
   input.clearHeld();
   setBanner("ENTER SECTOR 9");
   syncHud();
@@ -402,7 +403,7 @@ function updateCamera(dt) {
   const desired = head.clone()
     .addScaledVector(forward, -dist)
     .addScaledVector(right, shoulder)
-    .add(new THREE.Vector3(0, 0.42, 0));
+    .add(new THREE.Vector3(0, 1.35, 0));
   const dir = desired.clone().sub(head);
   const len = dir.length();
   dir.normalize();
@@ -538,8 +539,8 @@ function updatePickups(dt) {
     }
   }
   if (mission.phase === "tower") {
-    const d = Math.hypot(player.pos.x, player.pos.z + 38);
-    if (d < 3.6) interact = { kind: "tower" };
+    const d = Math.hypot(player.pos.x, player.pos.z + 34.8);
+    if (d < 2.8) interact = { kind: "tower" };
   }
 }
 
@@ -556,7 +557,7 @@ function updateEnemies(dt) {
   while (mission.queue.length && enemies.filter((e) => !e.dead).length < 5) {
     const type = mission.queue.shift();
     const e = createEnemy(type);
-    const spots = [new THREE.Vector3(-20, 0, 0), new THREE.Vector3(20, 0, 2), new THREE.Vector3(0, 0, -12), new THREE.Vector3(2, 0, 18)];
+    const spots = [new THREE.Vector3(-6, 0, 8), new THREE.Vector3(6, 0, -4), new THREE.Vector3(0, 0, -16), new THREE.Vector3(4, 0, 20)];
     e.pos.copy(spots[Math.floor(Math.random() * spots.length)]);
     e.pos.x += Math.random() * 2;
     resolve(e.pos, 0.5, world.colliders);
