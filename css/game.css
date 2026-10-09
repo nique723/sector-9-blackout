@@ -266,6 +266,8 @@ html, body {
 }
 .fire small { font-size: 8px; letter-spacing: 0.04em; font-weight: 600; opacity: 0.8; text-align: center; width: 84px; }
 
+[hidden] { display: none !important; }
+
 .screen {
   position: absolute;
   inset: 0;
@@ -273,6 +275,7 @@ html, body {
   place-items: center;
   background: rgba(4, 6, 10, 0.72);
   padding: 24px;
+  z-index: 20;
 }
 .panel {
   width: min(520px, 100%);
@@ -319,12 +322,14 @@ input[type="range"], select { width: 100%; margin-top: 4px; }
 #portrait, #resume-lock {
   position: absolute;
   inset: 0;
+  z-index: 20;
   display: grid;
   place-items: center;
   background: #07090d;
   text-align: center;
   padding: 24px;
 }
+#portrait[hidden], #resume-lock[hidden], .screen[hidden] { display: none !important; }
 
 @media (max-width: 740px) {
   .top { grid-template-columns: 1fr auto; }

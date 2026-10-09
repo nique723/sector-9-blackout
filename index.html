@@ -7,11 +7,11 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="theme-color" content="#07090d" />
   <title>Sector 9 — City Under Siege</title>
-  <link rel="stylesheet" href="css/game.css" />
+  <link rel="stylesheet" href="css/game.css?v=7" />
 </head>
 <body>
   <div id="app">
-    <div id="build-stamp">BUILD 6</div>
+    <div id="build-stamp">BUILD 7</div>
 
     <canvas id="view"></canvas>
 
@@ -130,39 +130,7 @@
       </div>
     </div>
 
-    <div id="portrait" hidden>
-      <div>
-        <h1>ROTATE DEVICE TO PLAY</h1>
-        <p>Sector 9 is built for landscape. You can still enter.</p>
-        <button class="primary" id="btn-force-play" type="button">PLAY ANYWAY</button>
-      </div>
-    </div>
-
   </div>
-  <script>
-    window.__s9Enter = false;
-    function s9enter(ev) {
-      if (ev && ev.cancelable) ev.preventDefault();
-      window.__s9Enter = true;
-      ["screen-start", "resume-lock", "portrait", "screen-pause"].forEach(function (id) {
-        var el = document.getElementById(id);
-        if (el) el.hidden = true;
-      });
-      var hud = document.getElementById("hud");
-      if (hud) hud.hidden = false;
-      var banner = document.getElementById("banner");
-      if (banner) {
-        banner.hidden = false;
-        banner.textContent = "TAP RECEIVED";
-      }
-    }
-    ["btn-start", "btn-unpause-vis", "btn-force-play", "btn-resume", "screen-start", "resume-lock", "portrait"].forEach(function (id) {
-      var el = document.getElementById(id);
-      if (!el) return;
-      el.addEventListener("pointerdown", s9enter);
-      el.addEventListener("click", s9enter);
-    });
-  </script>
   <script type="importmap">
   {
     "imports": {
@@ -170,6 +138,6 @@
     }
   }
   </script>
-  <script type="module" src="js/game.js?v=6"></script>
+  <script type="module" src="js/game.js?v=7"></script>
 </body>
 </html>
