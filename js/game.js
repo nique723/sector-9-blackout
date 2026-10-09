@@ -102,6 +102,7 @@ async function boot() {
   } catch (err) {
     $("load-error").hidden = false;
     $("load-error").textContent = "Asset/init error: " + err.message;
+    $("build-stamp").textContent = "BUILD 8 ERROR";
     console.error(err);
   }
 }
@@ -174,12 +175,8 @@ function bindUi() {
     sfx.unlock();
     $("screen-start").hidden = true;
     $("hud").hidden = false;
-    if (isPortrait()) {
-      mode = "pause";
-      pauseReason = "portrait";
-      $("portrait").hidden = false;
-      return;
-    }
+    $("screen-start").hidden = true;
+    $("hud").hidden = false;
     beginPlay();
   };
   $("btn-resume").onclick = resume;
@@ -206,13 +203,17 @@ function bindUi() {
   });
 }
 
+function hide(id) {
+  const el = $(id);
+  if (el) el.hidden = true;
+}
+
 function beginPlay() {
-  $("screen-start").hidden = true;
-  $("screen-pause").hidden = true;
-  const lock = $("resume-lock");
-  if (lock) lock.hidden = true;
-  $("portrait").hidden = true;
-  $("portrait").hidden = true;
+  hide("screen-start");
+  hide("screen-pause");
+  hide("screen-load");
+  hide("resume-lock");
+  hide("portrait");
   $("hud").hidden = false;
   mode = "play";
   pauseReason = null;
@@ -224,11 +225,9 @@ function beginPlay() {
 }
 
 function restart() {
-  $("screen-end").hidden = true;
-  $("screen-pause").hidden = true;
-  const lock = $("resume-lock");
-  if (lock) lock.hidden = true;
-  $("portrait").hidden = true;
+  hide("screen-end");
+  hide("screen-pause");
+  hide("resume-lock");
   resetMission();
   sfx.unlock();
   beginPlay();
@@ -261,10 +260,8 @@ function isPortrait() {
 function loop() {
   requestAnimationFrame(loop);
   const dt = Math.min(clock.getDelta(), 0.05);
-  $("portrait").hidden = true;
-  const lock = $("resume-lock");
-  if (lock) lock.hidden = true;
-  $("portrait").hidden = true;
+  hide("portrait");
+  hide("resume-lock");
   if (mode === "play" || window.__s9Enter) {
     if (window.__s9Enter && mode !== "play") beginPlay();
     update(dt);
