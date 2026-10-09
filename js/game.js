@@ -87,8 +87,7 @@ async function boot() {
     document.addEventListener("visibilitychange", onVis);
     $("load-status").textContent = "District ready.";
     $("screen-load").hidden = true;
-    $("screen-start").hidden = false;
-    mode = "start";
+    $("screen-start").hidden = true;
     window.S9 = { get state() { return snapshot(); } };
     if (location.hash === "#test") {
       window.S9.debug = {
@@ -98,6 +97,7 @@ async function boot() {
         emptyMag: () => { player.mag = 0; }
       };
     }
+    beginPlay();
     requestAnimationFrame(loop);
   } catch (err) {
     $("load-error").hidden = false;
@@ -232,14 +232,13 @@ function restart() {
 }
 
 function pause(reason) {
+  if (reason === "tab") return;
   if (mode !== "play") return;
-  if (reason === "tab" && performance.now() < resumeGraceUntil) return;
   mode = "pause";
   pauseReason = reason;
   input.blocked = true;
   input.clearHeld();
-  if (reason === "tab") $("resume-lock").hidden = false;
-  else $("screen-pause").hidden = false;
+  $("screen-pause").hidden = false;
   document.exitPointerLock?.();
 }
 
@@ -259,30 +258,12 @@ function isPortrait() {
 function loop() {
   requestAnimationFrame(loop);
   const dt = Math.min(clock.getDelta(), 0.05);
-  const portrait = isPortrait();
-  if (portrait && (mode === "play" || mode === "pause")) {
-    if (mode === "play") {
-      mode = "pause";
-      input.blocked = true;
-      input.clearHeld();
-      document.exitPointerLock?.();
-    }
-    pauseReason = "portrait";
-    $("portrait").hidden = false;
-    $("resume-lock").hidden = true;
-  } else if (!portrait && pauseReason === "portrait") {
-    $("portrait").hidden = true;
-    $("resume-lock").hidden = false;
-    mode = "pause";
-    pauseReason = "tab";
-  } else {
-    $("portrait").hidden = true;
-  }
+  $("portrait").hidden = true;
+  $("resume-lock").hidden = true;
   if (mode === "play" || window.__s9Enter) {
     if (window.__s9Enter && mode !== "play") beginPlay();
     update(dt);
-  }
-  else if (ghost) animateGhost(ghost.parts, player?.state || "idle", clock.elapsedTime, false);
+  } else if (ghost) animateGhost(ghost.parts, player?.state || "idle", clock.elapsedTime, false);
   renderer.render(scene, camera);
   if (fpsOn) {
     fpsAcc += dt;
