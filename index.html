@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#07090d" />
+  <title>Sector 9 — City Under Siege</title>
+  <link rel="stylesheet" href="css/game.css" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="view"></canvas>
+
+    <div id="hud" hidden>
+      <header class="top">
+        <div class="card ghost-card">
+          <div class="portrait" aria-hidden="true"></div>
+          <div>
+            <div class="name">GHOST</div>
+            <div class="hp-track"><div id="hp-fill"></div></div>
+            <div class="hp-label"><span id="hp-text">100 HP</span></div>
+          </div>
+        </div>
+        <div class="card mission-card">
+          <div class="kicker">MISSION 01: BLACKOUT</div>
+          <div id="objective">ENTER THE DISTRICT</div>
+        </div>
+        <div class="top-right">
+          <div class="card ammo-card">
+            <div class="gun" aria-hidden="true"></div>
+            <div>
+              <div id="weapon-name">PISTOL</div>
+              <div id="ammo-text">12 / 60</div>
+            </div>
+          </div>
+          <button class="btn icon" id="btn-pause" type="button" data-action="pause" aria-label="Pause">II</button>
+        </div>
+      </header>
+
+      <div class="mid-left">
+        <div class="pill" id="wave-pill">WAVE — / 3</div>
+        <div class="pill" id="cell-pill">CELLS 0 / 3</div>
+        <div class="pill" id="xp-pill">XP 0</div>
+      </div>
+
+      <div id="marker" hidden></div>
+      <div id="reticle"></div>
+      <div id="banner" hidden></div>
+      <div id="dmg"></div>
+      <div id="fps" hidden>FPS --</div>
+
+      <footer class="controls">
+        <div class="left-controls">
+          <button class="btn small" id="btn-sprint" type="button" data-action="sprint">SPRINT</button>
+          <div class="joy" id="joy" data-action="move">
+            <div class="joy-stick" id="joy-stick"></div>
+          </div>
+          <div class="hint">MOVE</div>
+        </div>
+        <div class="right-controls">
+          <button class="btn small" id="btn-reload" type="button" data-action="reload">RELOAD</button>
+          <button class="btn small" id="btn-weapon" type="button" data-action="weapon">SWAP</button>
+          <div class="cluster">
+            <button class="btn" id="btn-melee" type="button" data-action="melee">MELEE</button>
+            <button class="btn" id="btn-dodge" type="button" data-action="dodge">DODGE</button>
+            <button class="btn" id="btn-use" type="button" data-action="use">USE</button>
+          </div>
+          <button class="fire" id="btn-fire" type="button" data-action="fire">
+            <span>FIRE</span>
+            <small>HOLD + DRAG TO AIM</small>
+          </button>
+        </div>
+      </footer>
+    </div>
+
+    <div id="screen-load" class="screen">
+      <div class="panel">
+        <div class="brand">S9 · SECTOR 9</div>
+        <h1>CITY UNDER SIEGE</h1>
+        <p id="load-status">Loading district…</p>
+        <p id="load-error" class="error" hidden></p>
+      </div>
+    </div>
+
+    <div id="screen-start" class="screen" hidden>
+      <div class="panel">
+        <div class="brand">MISSION 01 · BLACKOUT</div>
+        <h1>RESTORE COMMUNICATIONS</h1>
+        <p>Ghost is in Sector 9. Collect three power cells, survive the patrol and three waves, then activate the tower.</p>
+        <ul class="brief">
+          <li>Left thumb: move. Sprint is a toggle.</li>
+          <li>Right thumb: hold Fire to shoot, drag to aim.</li>
+          <li>Drag the open right side to aim without firing.</li>
+        </ul>
+        <button class="primary" id="btn-start" type="button">START MISSION</button>
+        <p class="fine">Landscape play. Audio starts with this tap. Checkpoints are not included — restart resets the mission.</p>
+      </div>
+    </div>
+
+    <div id="screen-pause" class="screen" hidden>
+      <div class="panel">
+        <h1>PAUSED</h1>
+        <label>Aim sensitivity <input id="sens" type="range" min="0.4" max="2.2" step="0.05" value="1" /></label>
+        <label>Graphics
+          <select id="quality">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+          </select>
+        </label>
+        <label>Volume <input id="volume" type="range" min="0" max="1" step="0.05" value="0.7" /></label>
+        <label class="check"><input id="show-fps" type="checkbox" /> Show FPS</label>
+        <div class="row">
+          <button class="primary" id="btn-resume" type="button">RESUME</button>
+          <button class="ghost-btn" id="btn-restart" type="button">RESTART</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="screen-end" class="screen" hidden>
+      <div class="panel">
+        <div class="brand" id="end-kicker">SECTOR 9</div>
+        <h1 id="end-title">MISSION COMPLETE</h1>
+        <p id="end-copy"></p>
+        <button class="primary" id="btn-again" type="button">RESTART MISSION</button>
+      </div>
+    </div>
+
+    <div id="portrait" hidden>
+      <div>
+        <h1>ROTATE DEVICE TO PLAY</h1>
+        <p>Sector 9 is landscape-only. The mission is paused.</p>
+      </div>
+    </div>
+
+    <div id="resume-lock" hidden>
+      <button class="primary" id="btn-unpause-vis" type="button">TAP TO RESUME</button>
+    </div>
+  </div>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+    }
+  }
+  </script>
+  <script type="module" src="js/game.js"></script>
+</body>
+</html>
