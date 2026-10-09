@@ -31,6 +31,7 @@ let mission;
 let interact = null;
 let pauseReason = null;
 let resumeGraceUntil = 0;
+let forcePlay = false;
 const aimDir = new THREE.Vector3();
 const camTarget = new THREE.Vector3();
 const tmp = new THREE.Vector3();
@@ -183,6 +184,8 @@ function bindUi() {
   };
   $("btn-resume").onclick = resume;
   $("btn-unpause-vis").onclick = resume;
+  $("btn-force-play").onclick = resume;
+  $("btn-unpause-vis").addEventListener("pointerup", (e) => { e.preventDefault(); resume(); });
   $("btn-restart").onclick = restart;
   $("btn-again").onclick = restart;
   $("sens").value = settings.sensitivity;
@@ -213,8 +216,10 @@ function beginPlay() {
   mode = "play";
   pauseReason = null;
   input.blocked = false;
-  resumeGraceUntil = performance.now() + 900;
+  forcePlay = true;
+  resumeGraceUntil = performance.now() + 1200;
   if (clock) clock.getDelta();
+  setBanner("MISSION LIVE");
 }
 
 function restart() {
@@ -240,14 +245,6 @@ function pause(reason) {
 
 function resume() {
   sfx.unlock();
-  if (isPortrait()) {
-    $("resume-lock").hidden = true;
-    $("screen-pause").hidden = true;
-    $("portrait").hidden = false;
-    mode = "pause";
-    pauseReason = "portrait";
-    return;
-  }
   beginPlay();
 }
 
@@ -256,7 +253,7 @@ function onVis() {
 }
 
 function isPortrait() {
-  return window.innerHeight > window.innerWidth + 40;
+  return !forcePlay && window.innerHeight > window.innerWidth + 80;
 }
 
 function loop() {
