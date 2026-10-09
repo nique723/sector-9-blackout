@@ -64,6 +64,7 @@ export function createWorld(scene, quality) {
   addProps(scene, colliders, quality);
   const tower = addTower(scene, colliders, lights, quality);
   addAccentLights(scene, lights, quality);
+  addStreetDressing(scene, colliders, quality);
 
   return { colliders, lights, tower, ground };
 }
@@ -147,6 +148,50 @@ function addTower(scene, colliders, lights, quality) {
     lights.push(pl);
   }
   return g;
+}
+
+function addStreetDressing(scene, colliders, quality) {
+  const concrete = new THREE.MeshStandardMaterial({ color: 0x2a313a, roughness: 0.9 });
+  const curb = new THREE.Mesh(new THREE.BoxGeometry(18, 0.16, 7.4), concrete);
+  curb.position.set(0, 0.08, 22);
+  curb.receiveShadow = true;
+  scene.add(curb);
+  const walkL = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.12, 62), concrete);
+  walkL.position.set(-8.2, 0.06, -4);
+  const walkR = walkL.clone();
+  walkR.position.x = 8.2;
+  scene.add(walkL, walkR);
+
+  const lampMat = new THREE.MeshStandardMaterial({ color: 0x242a32, metalness: 0.4, roughness: 0.45 });
+  const glow = new THREE.MeshStandardMaterial({ color: 0xfff1c9, emissive: 0xffb15a, emissiveIntensity: 1.4 });
+  [[-7.2, 10], [7.2, -4], [-7.2, -18], [7.2, -30]].forEach(([x, z], i) => {
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 4.4, 6), lampMat);
+    pole.position.set(x, 2.2, z);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.12, 0.28), glow);
+    head.position.set(x + (x < 0 ? 0.3 : -0.3), 4.3, z);
+    scene.add(pole, head);
+    if (quality !== "low" && i % 2 === 0) {
+      const pl = new THREE.PointLight(0xffb15a, 0.85, 9, 2);
+      pl.position.set(x, 4.1, z);
+      scene.add(pl);
+    }
+  });
+
+  const barrier = new THREE.MeshStandardMaterial({ color: 0x6a1c24, roughness: 0.7 });
+  [[-3.2, 16], [3.4, 12], [-2.4, -8]].forEach(([x, z]) => {
+    const box = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.8, 0.7), barrier);
+    box.position.set(x, 0.4, z);
+    scene.add(box);
+    colliders.push({ minX: x - 0.7, maxX: x + 0.7, minZ: z - 0.35, maxZ: z + 0.35, minY: 0, maxY: 0.8 });
+  });
+
+  const banner = new THREE.MeshStandardMaterial({ color: 0x8d1d2a, roughness: 0.6, emissive: 0x3a0c12, emissiveIntensity: 0.25 });
+  [[-8.6, 6], [8.6, -16]].forEach(([x, z]) => {
+    const cloth = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 3.2), banner);
+    cloth.position.set(x, 3.4, z);
+    cloth.rotation.y = x < 0 ? Math.PI / 2 : -Math.PI / 2;
+    scene.add(cloth);
+  });
 }
 
 function addAccentLights(scene, lights, quality) {

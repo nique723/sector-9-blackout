@@ -7,11 +7,11 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="theme-color" content="#07090d" />
   <title>Sector 9 — City Under Siege</title>
-  <link rel="stylesheet" href="css/game.css?v=9" />
+  <link rel="stylesheet" href="css/game.css?v=10" />
 </head>
 <body>
   <div id="app">
-    <div id="build-stamp">BUILD 8</div>
+    <div id="build-stamp">BUILD 10</div>
 
     <canvas id="view"></canvas>
 
@@ -130,6 +130,15 @@
       </div>
     </div>
 
+    <div id="portrait" hidden>
+      <div>
+        <h1>ROTATE DEVICE TO PLAY</h1>
+        <p>Sector 9 is landscape-only. The mission is paused.</p>
+      </div>
+    </div>
+    <div id="resume-lock" hidden>
+      <button class="primary" id="btn-unpause-vis" type="button">TAP TO RESUME</button>
+    </div>
   </div>
   <script type="importmap">
   {
@@ -138,6 +147,6 @@
     }
   }
   </script>
-  <script type="module" src="js/game.js?v=9"></script>
+  <script type="module" src="js/game.js?v=10"></script>
 </body>
 </html>

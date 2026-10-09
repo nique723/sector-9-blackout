@@ -36,6 +36,8 @@ const aimDir = new THREE.Vector3();
 const camTarget = new THREE.Vector3();
 const tmp = new THREE.Vector3();
 const muzzle = new THREE.Vector3();
+let aimRay = null;
+let aimNdc = null;
 
 const CELL_SPOTS = [
   { id: "c1", pos: new THREE.Vector3(-18, 0, 2) },
@@ -69,6 +71,8 @@ async function boot() {
     renderer.toneMappingExposure = 1.35;
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(58, 1, 0.1, 120);
+    aimRay = new THREE.Raycaster();
+    aimNdc = new THREE.Vector2();
     clock = new THREE.Clock();
     applyQuality();
     world = createWorld(scene, quality);
@@ -87,7 +91,8 @@ async function boot() {
     document.addEventListener("visibilitychange", onVis);
     $("load-status").textContent = "District ready.";
     $("screen-load").hidden = true;
-    $("screen-start").hidden = true;
+    $("screen-start").hidden = false;
+    mode = "start";
     window.S9 = { get state() { return snapshot(); } };
     if (location.hash === "#test") {
       window.S9.debug = {
@@ -97,7 +102,6 @@ async function boot() {
         emptyMag: () => { player.mag = 0; }
       };
     }
-    beginPlay();
     requestAnimationFrame(loop);
   } catch (err) {
     $("load-error").hidden = false;
@@ -150,6 +154,7 @@ function resetMission() {
     wave: 0,
     wavesDone: 0,
     queue: [],
+    waveLive: false,
     xp: 0,
     objective: "COLLECT THE FIRST POWER CELL"
   };
@@ -175,11 +180,19 @@ function bindUi() {
     sfx.unlock();
     $("screen-start").hidden = true;
     $("hud").hidden = false;
-    $("screen-start").hidden = true;
-    $("hud").hidden = false;
+    if (isPortrait()) {
+      mode = "pause";
+      pauseReason = "portrait";
+      input.blocked = true;
+      const gate = $("portrait");
+      if (gate) gate.hidden = false;
+      return;
+    }
     beginPlay();
   };
   $("btn-resume").onclick = resume;
+  const enter = $("btn-unpause-vis");
+  if (enter) enter.onclick = resume;
   const force = $("btn-force-play");
   if (force) force.onclick = resume;
   $("btn-restart").onclick = restart;
@@ -218,8 +231,7 @@ function beginPlay() {
   mode = "play";
   pauseReason = null;
   input.blocked = false;
-  forcePlay = true;
-  resumeGraceUntil = performance.now() + 1200;
+  resumeGraceUntil = performance.now() + 700;
   if (clock) clock.getDelta();
   setBanner("MISSION LIVE");
 }
@@ -228,24 +240,45 @@ function restart() {
   hide("screen-end");
   hide("screen-pause");
   hide("resume-lock");
+  hide("portrait");
   resetMission();
   sfx.unlock();
   beginPlay();
 }
 
 function pause(reason) {
-  if (reason === "tab") return;
   if (mode !== "play") return;
+  if (reason === "tab" && performance.now() < resumeGraceUntil) return;
   mode = "pause";
   pauseReason = reason;
   input.blocked = true;
   input.clearHeld();
-  $("screen-pause").hidden = false;
+  hide("screen-pause");
+  hide("resume-lock");
+  hide("portrait");
+  if (reason === "portrait") {
+    const gate = $("portrait");
+    if (gate) gate.hidden = false;
+  } else if (reason === "tab") {
+    const lock = $("resume-lock");
+    if (lock) lock.hidden = false;
+  } else {
+    $("screen-pause").hidden = false;
+  }
   document.exitPointerLock?.();
 }
 
 function resume() {
   sfx.unlock();
+  if (isPortrait()) {
+    mode = "pause";
+    pauseReason = "portrait";
+    input.blocked = true;
+    hide("resume-lock");
+    const gate = $("portrait");
+    if (gate) gate.hidden = false;
+    return;
+  }
   beginPlay();
 }
 
@@ -254,18 +287,15 @@ function onVis() {
 }
 
 function isPortrait() {
-  return !forcePlay && window.innerHeight > window.innerWidth + 80;
+  return window.innerHeight > window.innerWidth + 80;
 }
 
 function loop() {
   requestAnimationFrame(loop);
   const dt = Math.min(clock.getDelta(), 0.05);
-  hide("portrait");
-  hide("resume-lock");
-  if (mode === "play" || window.__s9Enter) {
-    if (window.__s9Enter && mode !== "play") beginPlay();
-    update(dt);
-  } else if (ghost) animateGhost(ghost.parts, player?.state || "idle", clock.elapsedTime, false);
+  if (isPortrait() && mode === "play") pause("portrait");
+  if (mode === "play") update(dt);
+  else if (ghost) animateGhost(ghost.parts, player?.state || "idle", clock.elapsedTime, false);
   renderer.render(scene, camera);
   if (fpsOn) {
     fpsAcc += dt;
@@ -283,7 +313,7 @@ function update(dt) {
   if (input.take("pause")) pause("user");
   const look = input.consumeLook();
   camYaw -= look.dx;
-  camPitch = Math.max(-0.35, Math.min(0.7, camPitch - look.dy));
+  camPitch = Math.max(-0.55, Math.min(0.85, camPitch - look.dy));
   player.yaw = camYaw;
 
   if (player.hp <= 0) {
@@ -358,18 +388,25 @@ function update(dt) {
 }
 
 function updateCamera(dt) {
-  const head = player.pos.clone().add(new THREE.Vector3(0, 1.55, 0));
-  const dist = 5.6;
-  const height = 2.05;
-  const back = new THREE.Vector3(Math.sin(camYaw), 0, Math.cos(camYaw));
+  const shoulder = 0.78;
+  const dist = 4.6;
+  const forward = new THREE.Vector3(Math.sin(camYaw), 0, Math.cos(camYaw));
+  const right = new THREE.Vector3(forward.z, 0, -forward.x);
+  const lookDir = new THREE.Vector3(
+    Math.sin(camYaw) * Math.cos(camPitch),
+    Math.sin(camPitch),
+    Math.cos(camYaw) * Math.cos(camPitch)
+  );
+  const head = player.pos.clone().add(new THREE.Vector3(0, 1.5, 0));
   const desired = head.clone()
-    .addScaledVector(back, -dist)
-    .add(new THREE.Vector3(0, height + camPitch, 0));
+    .addScaledVector(forward, -dist)
+    .addScaledVector(right, shoulder)
+    .add(new THREE.Vector3(0, 0.55 - camPitch * 1.1, 0));
   const dir = desired.clone().sub(head);
   const len = dir.length();
   dir.normalize();
   const hit = rayHit(head, dir, len, world.colliders);
-  const used = hit ? Math.max(1.1, hit.t - 0.25) : len;
+  const used = hit ? Math.max(1.05, hit.t - 0.3) : len;
   camTarget.copy(head).addScaledVector(dir, used);
   if (shake > 0) {
     camTarget.x += (Math.random() - 0.5) * shake;
@@ -377,9 +414,16 @@ function updateCamera(dt) {
     shake = Math.max(0, shake - dt * 1.4);
   }
   camera.position.lerp(camTarget, 1 - Math.pow(0.001, dt));
-  const lookAt = player.pos.clone().add(new THREE.Vector3(0, 1.35, 0)).addScaledVector(back, 6);
-  camera.lookAt(lookAt);
+  const focus = head.clone().addScaledVector(lookDir, 12);
+  camera.lookAt(focus);
   camera.getWorldDirection(aimDir);
+}
+
+function crosshairAimPoint() {
+  aimNdc.set(0, 0.08);
+  aimRay.setFromCamera(aimNdc, camera);
+  const wall = rayHit(aimRay.ray.origin, aimRay.ray.direction, 48, world.colliders);
+  return aimRay.ray.origin.clone().addScaledVector(aimRay.ray.direction, wall ? wall.t : 42);
 }
 
 function tryFire() {
@@ -393,7 +437,7 @@ function tryFire() {
   sfx.shot();
   shake = Math.min(0.12, shake + 0.05);
   ghost.parts.pistol.getWorldPosition(muzzle);
-  const aimPoint = camera.position.clone().addScaledVector(aimDir, 40);
+  const aimPoint = crosshairAimPoint();
   const shotDir = aimPoint.sub(muzzle).normalize();
   const wall = rayHit(muzzle, shotDir, 42, world.colliders);
   let best = wall ? wall.t : 42;
@@ -520,6 +564,7 @@ function updateEnemies(dt) {
     e.group.userData.ephemeral = true;
     scene.add(e.group);
     enemies.push(e);
+    mission.waveLive = true;
   }
   for (const e of enemies) {
     e.attackT -= dt;
@@ -570,7 +615,8 @@ function updateEnemies(dt) {
 
 function updateMission() {
   const alive = enemies.some((e) => !e.dead) || mission.queue.length > 0;
-  if (mission.phase === "patrol" && mission.patrolSpawned && !alive) {
+  if (mission.phase === "patrol" && mission.patrolSpawned && mission.waveLive && !alive) {
+    mission.waveLive = false;
     mission.patrolDone = true;
     mission.phase = "cells";
     mission.objective = "RECOVER TWO MORE POWER CELLS";
@@ -579,13 +625,14 @@ function updateMission() {
   if (mission.phase === "cells" && mission.cells >= 3) {
     mission.phase = "wave";
     mission.wave = 1;
+    mission.waveLive = false;
     mission.objective = "SURVIVE WAVE 1 / 3";
     queueSpawns(["patrol", "patrol", "patrol"]);
     setBanner("WAVE 1");
     sfx.wave();
   }
-  if (mission.phase === "wave" && !alive) {
-    mission.phase = "wave-clear";
+  if (mission.phase === "wave" && mission.waveLive && !alive) {
+    mission.waveLive = false;
     mission.wavesDone += 1;
     if (mission.wavesDone >= 3) {
       mission.phase = "tower";

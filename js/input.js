@@ -87,6 +87,7 @@ export class Input {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
+    window.addEventListener("lostpointercapture", up);
 
     canvas.addEventListener("pointerdown", (e) => {
       if (this.blocked || e.target !== canvas) return;
@@ -134,14 +135,21 @@ export class Input {
 
   clearHeld() {
     this.pointers.clear();
+    this.keys.clear();
     this.move.x = 0;
     this.move.y = 0;
     this.move.active = false;
     this.fireHeld = false;
+    this.sprint = false;
     this.mouseDown = false;
+    this.look.dx = 0;
+    this.look.dy = 0;
+    this.mouseDx = 0;
+    this.mouseDy = 0;
+    this.edges = { melee: false, dodge: false, use: false, reload: false, weapon: false, pause: false };
     const stick = document.getElementById("joy-stick");
     if (stick) stick.style.transform = "translate(0px, 0px)";
-    document.querySelectorAll(".pressed").forEach((el) => el.classList.remove("pressed"));
+    document.querySelectorAll(".pressed, .on").forEach((el) => el.classList.remove("pressed", "on"));
   }
 
   consumeLook() {
