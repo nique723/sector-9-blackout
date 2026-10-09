@@ -66,7 +66,7 @@ async function boot() {
     renderer = new THREE.WebGLRenderer({ canvas: $("view"), antialias: quality !== "low", powerPreference: "high-performance" });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
+    renderer.toneMappingExposure = 1.35;
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(58, 1, 0.1, 120);
     clock = new THREE.Clock();
@@ -359,8 +359,8 @@ function update(dt) {
 
 function updateCamera(dt) {
   const head = player.pos.clone().add(new THREE.Vector3(0, 1.55, 0));
-  const dist = 4.4;
-  const height = 1.7;
+  const dist = 5.6;
+  const height = 2.05;
   const back = new THREE.Vector3(Math.sin(camYaw), 0, Math.cos(camYaw));
   const desired = head.clone()
     .addScaledVector(back, -dist)

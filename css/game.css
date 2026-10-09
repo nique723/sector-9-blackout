@@ -308,9 +308,11 @@ input[type="range"], select { width: 100%; margin-top: 4px; }
 #build-stamp {
   position: absolute;
   z-index: 30;
-  top: calc(8px + var(--safe-t));
-  left: calc(8px + var(--safe-l));
-  font: 700 12px/1 ui-monospace, monospace;
+  top: auto;
+  bottom: calc(8px + var(--safe-b));
+  left: 50%;
+  transform: translateX(-50%);
+  font: 700 11px/1 ui-monospace, monospace;
   letter-spacing: 0.08em;
   color: #9fffe8;
   background: rgba(0,0,0,0.55);

@@ -22,9 +22,9 @@ export function createWorld(scene, quality) {
   ground.receiveShadow = true;
   scene.add(ground);
 
-  const hemi = new THREE.HemisphereLight(0x8fb4d8, 0x1a120e, 0.55);
+  const hemi = new THREE.HemisphereLight(0xb7d7ee, 0x2a241c, 1.15);
   scene.add(hemi);
-  const moon = new THREE.DirectionalLight(0xb7c7dc, quality === "low" ? 0.55 : 0.85);
+  const moon = new THREE.DirectionalLight(0xd5e4f4, quality === "low" ? 1.15 : 1.45);
   moon.position.set(-12, 28, 10);
   if (quality !== "low") {
     moon.castShadow = true;
