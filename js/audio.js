@@ -104,6 +104,13 @@ export class Sfx {
     this.tone({ freq: 120, slide: 40, dur: 0.16, type: "triangle", gain: 0.5 * v });
   }
 
+  // Enemy dropping a mag: the cue that it is safe to push.
+  enemyReload(dist = 10) {
+    const v = Math.max(0.25, 1 - dist / 24);
+    this.noise({ dur: 0.04, type: "bandpass", f0: 1300, q: 2.5, gain: 0.2 * v });
+    this.noise({ at: 0.5, dur: 0.04, type: "bandpass", f0: 1000, q: 2.5, gain: 0.24 * v });
+  }
+
   // A round passing close by.
   whiz() {
     this.noise({ dur: 0.16, type: "bandpass", f0: 3400, f1: 900, q: 5, gain: 0.16, attack: 0.02 });

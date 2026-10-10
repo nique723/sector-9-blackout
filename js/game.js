@@ -37,12 +37,18 @@ const FOV_SPRINT = 63;
 const PITCH_MIN = -0.85;
 const PITCH_MAX = 0.8;
 
+// The Blackout Crew. `role` decides how each type fights:
+//   hold  - finds a barricade or dumpster between you and them, trades shots from it
+//   flank - circles to your side and fires short bursts on the move
+//   push  - walks straight at you and fires long bursts
+// dmg is per round; burst is rounds per trigger pull; mag forces a reload.
 const ENEMY = {
-  patrol: { body: 0x39424d, glow: 0xff3344, scale: 1, hp: 46, speed: 2.6, dmg: 8, range: 11, hold: 6.5, cd: 1.15, xp: 10 },
-  hunter: { body: 0x1f3540, glow: 0x39e0ff, scale: 0.9, hp: 28, speed: 4.2, dmg: 7, range: 8, hold: 3.2, cd: 0.8, xp: 10 },
-  enforcer: { body: 0x4a4038, glow: 0xff8a1e, scale: 1.2, hp: 96, speed: 1.8, dmg: 16, range: 12, hold: 7.5, cd: 1.55, xp: 20 }
+  patrol: { role: "hold", tint: 0xa39c8e, glow: 0xff3344, scale: 1, bulk: 1, gun: "rifle", hp: 46, speed: 2.7, dmg: 8, range: 14, hold: 8, mag: 6, burst: 1, burstGap: 0, cd: 1.05, xp: 10 },
+  hunter: { role: "flank", tint: 0x6d777d, glow: 0x39e0ff, scale: 0.95, bulk: 0.93, gun: "smg", hp: 30, speed: 4.5, dmg: 5, range: 10, hold: 5, mag: 9, burst: 3, burstGap: 0.09, cd: 1, xp: 10 },
+  enforcer: { role: "push", tint: 0x5b544d, glow: 0xff8a1e, scale: 1.16, bulk: 1.16, gun: "heavy", hp: 110, speed: 1.9, dmg: 6, range: 12, hold: 3.5, mag: 12, burst: 4, burstGap: 0.11, cd: 1.35, xp: 20 }
 };
-const WINDUP = 0.42;           // enemy raises and steadies before each shot
+const WINDUP = 0.42;           // enemy raises and steadies before each burst
+const ENEMY_RELOAD = 1.8;      // the window to push them
 
 const settings = loadSettings();
 const input = new Input();
@@ -69,6 +75,9 @@ let resumeGraceUntil = 0;
 let hitMarkT = 0;
 let wasFiring = false;
 let floaters = [];
+let coverPoints = [];
+let calloutT = 0;
+let hurtDirT = 0;
 
 const camPivot = new THREE.Vector3();
 const lookDir = new THREE.Vector3();
@@ -113,7 +122,7 @@ function saveSettings() {
 
 async function boot() {
   try {
-    $("load-status").textContent = "Loading Sector 9 street…";
+    $("load-status").textContent = "Loading Sector 9, Caldosta…";
     renderer = new THREE.WebGLRenderer({ canvas: $("view"), antialias: quality !== "low", powerPreference: "high-performance" });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -126,6 +135,7 @@ async function boot() {
       loadSector9Street(scene, "assets/sector9-street/"),
       loadCharacters("assets/characters/")
     ]);
+    buildCover();
     ghost = new Rig(chars.ghost, { height: 1.84, weapon: "pistol", mono: 0x5c5e66, glow: 0xb00f1c, glowPower: 0.45, coat: true });
     scene.add(ghost.group);
     fx = new Fx(scene, quality);
@@ -167,13 +177,16 @@ function installDebug() {
   window.S9.debug = {
     teleport: (x, z) => { player.pos.set(x, 0, z); },
     look: (yaw, pitch) => { camYaw = yaw; camPitch = pitch; },
-    spawn: (type, x, z) => { const e = makeEnemy(type); e.pos.set(x, 0, z); e.passive = true; enemies.push(e); mission.waveLive = false; return enemies.length; },
+    spawn: (type, x, z) => { const e = makeEnemy(type); e.pos.set(x, 0, z); e.facing = Math.atan2(player.pos.x - x, player.pos.z - z); e.passive = true; enemies.push(e); mission.waveLive = false; return enemies.length; },
+    enemyState: () => enemies.map((e) => ({ type: e.type, hp: e.hp, dead: e.dead, x: +e.pos.x.toFixed(2), z: +e.pos.z.toFixed(2), cover: !!e.cover, ammo: e.ammo, reloading: e.reloadT > 0 })),
+    cover: () => coverPoints.map((c) => [+c.pos.x.toFixed(2), +c.pos.z.toFixed(2)]),
     wake: () => enemies.forEach((e) => { e.passive = false; }),
     killAll: () => enemies.forEach((e) => { if (!e.dead) damageEnemy(e, 999, false, e.pos.clone().setY(1.2), new THREE.Vector3(0, 0, 1)); }),
     hurt: (n) => hurtPlayer(n),
     emptyMag: () => { player.mag = 0; },
     aim: () => ({ kind: aimInfo.kind, head: aimInfo.head, t: aimInfo.t }),
     enemies: () => enemies.map((e) => ({ type: e.type, hp: e.hp, dead: e.dead })),
+    reset: () => resetMission(),
     freeze: (on = true) => { window.S9.frozen = on; },
     step: (n, dt = 1 / 60) => { for (let i = 0; i < n; i++) if (mode === "play") update(dt); },
     cam: (x, y, z, tx, ty, tz) => { window.S9.freeCam = x === undefined ? null : [x, y, z, tx, ty, tz]; }
@@ -188,6 +201,8 @@ function applyQuality() {
 function resetMission() {
   for (const e of enemies) e.rig.dispose();
   enemies = [];
+  for (const c of coverPoints) c.owner = null;
+  calloutT = 0;
   for (const p of pickups) scene.remove(p.mesh);
   pickups = [];
   floaters.forEach((f) => f.el.remove());
@@ -526,6 +541,10 @@ function update(dt) {
     bannerT -= dt;
     if (bannerT <= 0) $("banner").hidden = true;
   }
+  if (hurtDirT > 0) {
+    hurtDirT -= dt;
+    if (hurtDirT <= 0) $("hurt-dir").classList.remove("on");
+  }
 }
 
 function poseGhost(dt, speed = 0, aiming = false) {
@@ -792,12 +811,15 @@ function damageEnemy(e, amount, head, at, dir) {
   e.pos.z += dir.z * (head ? 0.16 : 0.1);
   resolve(e.pos, 0.45, world.colliders);
   const killed = e.hp <= 0;
+  if (!killed) e.rig.react(head);
   floatText(at, String(amount), head ? "crit" : "");
   hitMarker(killed ? "kill" : head ? "crit" : "");
   if (killed) {
     e.dead = true;
     e.deadT = 0;
     e.facing = Math.atan2(-dir.x, -dir.z);
+    releaseCover(e);
+    e.rig.die(head);
     mission.xp += ENEMY[e.type].xp + (head ? 5 : 0);
     sfx.kill();
     if (Math.random() < 0.55) pickups.push(makePickup(scene, e.pos.clone(), player.reserve < 24 || Math.random() < 0.5 ? "ammo" : "health"));
@@ -808,8 +830,16 @@ function damageEnemy(e, amount, head, at, dir) {
   }
 }
 
-function hurtPlayer(amount) {
+function hurtPlayer(amount, from) {
   player.hp = Math.max(0, player.hp - amount);
+  if (from) {
+    // Point the damage arc at whoever fired, relative to where the camera faces.
+    const rel = wrapPi(Math.atan2(from.x - player.pos.x, from.z - player.pos.z) - camYaw);
+    const el = $("hurt-dir");
+    el.style.transform = `rotate(${(-rel * 180 / Math.PI).toFixed(1)}deg)`;
+    el.classList.add("on");
+    hurtDirT = 0.9;
+  }
   player.hurtT = 0.28;
   sfx.hurt();
   shake = Math.min(0.14, shake + 0.09);
@@ -921,10 +951,14 @@ function queueSpawns(types) {
 
 function makeEnemy(type) {
   const spec = ENEMY[type];
-  const rig = new Rig(chars.enemy, { height: 1.82 * spec.scale, weapon: "rifle", body: spec.body, glow: spec.glow, glowPower: 0.95 });
+  const rig = new Rig(chars.crew, {
+    height: 1.82 * spec.scale, weapon: "rifle", gun: spec.gun, tint: spec.tint,
+    glow: spec.glow, glowPower: 0.55, armband: spec.glow, bulk: spec.bulk
+  });
   scene.add(rig.group);
   return {
     type,
+    role: spec.role,
     rig,
     scale: spec.scale,
     hp: spec.hp,
@@ -934,6 +968,10 @@ function makeEnemy(type) {
     range: spec.range,
     hold: spec.hold,
     cd: spec.cd,
+    ammo: spec.mag,
+    burstLeft: 0,
+    burstT: 0,
+    reloadT: 0,
     attackT: 0.8 + Math.random() * 0.8,
     windup: 0,
     aimHold: 0,
@@ -941,6 +979,12 @@ function makeEnemy(type) {
     hitT: 0,
     stagger: 0,
     alert: 0,
+    seen: false,
+    cover: null,
+    coverT: 0,
+    flankSide: Math.random() < 0.5 ? -1 : 1,
+    flankT: 1.5 + Math.random() * 2,
+    lastSeen: new THREE.Vector3(),
     dead: false,
     deadT: 0,
     passive: false,
@@ -953,6 +997,7 @@ function makeEnemy(type) {
 }
 
 function removeEnemy(e) {
+  releaseCover(e);
   e.rig.dispose();
 }
 
@@ -966,12 +1011,83 @@ function spawnEnemy(type) {
   e.pos.z += (Math.random() - 0.5) * 2.4;
   resolve(e.pos, 0.5, world.colliders);
   e.facing = Math.atan2(player.pos.x - e.pos.x, player.pos.z - e.pos.z);
+  e.lastSeen.copy(player.pos);
   enemies.push(e);
   mission.waveLive = true;
 }
 
+// Cover: standing spots beside every waist-high object in the street
+// (barricades, dumpsters). A spot counts as cover when its object sits
+// between it and the player.
+function buildCover() {
+  coverPoints = [];
+  const probe = new THREE.Vector3();
+  for (const c of world.colliders) {
+    const h = (c.maxY ?? 0) - (c.minY ?? 0);
+    if (h < 0.8 || h > 1.6) continue;
+    const cx = (c.minX + c.maxX) / 2;
+    const cz = (c.minZ + c.maxZ) / 2;
+    const off = 0.7;
+    const spots = [[c.minX - off, cz], [c.maxX + off, cz], [cx, c.minZ - off], [cx, c.maxZ + off]];
+    for (const [x, z] of spots) {
+      probe.set(x, 0, z);
+      resolve(probe, 0.45, world.colliders);
+      if (Math.hypot(probe.x - x, probe.z - z) > 0.08) continue;
+      coverPoints.push({ pos: new THREE.Vector3(x, 0, z), collider: c, owner: null });
+    }
+  }
+}
+
+function covers(point, target) {
+  return !segmentClear(point.pos, target, [point.collider], 0.02);
+}
+
+function releaseCover(e) {
+  if (e.cover && e.cover.owner === e) e.cover.owner = null;
+  e.cover = null;
+}
+
+function pickCover(e) {
+  let best = null;
+  let bestScore = Infinity;
+  for (const p of coverPoints) {
+    if (p.owner && p.owner !== e && !p.owner.dead) continue;
+    if (!covers(p, player.pos)) continue;
+    const dPlayer = p.pos.distanceTo(player.pos);
+    if (dPlayer < 4.5 || dPlayer > e.range - 0.5) continue;
+    const dSelf = p.pos.distanceTo(e.pos);
+    if (dSelf > 16) continue;
+    const score = dSelf + Math.abs(dPlayer - e.hold) * 0.6;
+    if (score < bestScore) { bestScore = score; best = p; }
+  }
+  return best;
+}
+
+function callout(e, text) {
+  if (calloutT > 0) return;
+  calloutT = 1.4;
+  floatText(e.pos.clone().setY(2.15 * e.scale), text, "callout");
+}
+
+// Walk towards `goal`, sidestepping whatever is in the way.
+function steer(e, goal, speed, dt) {
+  const dir = tmpB.copy(goal).sub(e.pos);
+  dir.y = 0;
+  const len = dir.length();
+  if (len < 0.2) return null;
+  dir.divideScalar(len);
+  if (blocked(e.pos, dir, 1.2, 0.45, world.colliders)) {
+    const left = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(e.strafe);
+    if (!blocked(e.pos, left, 1.2, 0.45, world.colliders)) dir.copy(left);
+    else dir.copy(left.multiplyScalar(-1));
+  }
+  e.pos.addScaledVector(dir, Math.min(speed * dt, len));
+  return dir.clone();
+}
+
 function updateEnemies(dt) {
   while (mission.queue.length && enemies.filter((e) => !e.dead).length < 5) spawnEnemy(mission.queue.shift());
+  calloutT = Math.max(0, calloutT - dt);
 
   const chest = new THREE.Vector3(player.pos.x, 1.3, player.pos.z);
   const playerSpeed = player.vel.length();
@@ -1002,40 +1118,61 @@ function updateEnemies(dt) {
     const dist = to.length();
     to.divideScalar(Math.max(dist, 0.001));
     const los = !e.passive && player.hp > 0 && segmentClear(e.pos, player.pos, world.colliders, 0.15);
-    const sees = los && (dist < 20 || e.alert > 0);
-    if (sees) e.alert = 3;
-    const before = tmpB.copy(e.pos);
-    let faceWant = e.facing;
+    const sees = los && (dist < 22 || e.alert > 0);
+    if (sees) {
+      e.alert = 3;
+      e.lastSeen.copy(player.pos);
+      if (!e.seen) { e.seen = true; callout(e, "CONTACT"); }
+    }
+    const firing = e.windup > 0 || e.burstLeft > 0;
+    const reloading = e.reloadT > 0;
+    const before = e.pos.clone();
+    let moved = null;
+    let speed = e.speed * (reloading ? 0.7 : 1);
 
     if (e.passive || e.stagger > 0) {
       // Standing still: idle, or reeling from a hit.
-    } else if (sees) {
-      faceWant = Math.atan2(to.x, to.z);
-      const steady = e.windup > 0;
-      if (dist > e.hold && !steady) {
-        let dir = to.clone();
-        if (blocked(e.pos, dir, 1.2, 0.45, world.colliders)) {
-          const left = new THREE.Vector3(-dir.z, 0, dir.x);
-          dir = blocked(e.pos, left, 1.2, 0.45, world.colliders) ? left.multiplyScalar(-1) : left;
+    } else if (!sees) {
+      // Lost sight: go to where the player was last seen.
+      releaseCover(e);
+      moved = steer(e, e.alert > 0 ? e.lastSeen : player.pos, speed * 0.8, dt);
+    } else if (e.role === "hold") {
+      e.coverT -= dt;
+      if (e.coverT <= 0 || (e.cover && !covers(e.cover, player.pos))) {
+        e.coverT = 0.8;
+        const next = pickCover(e);
+        if (next !== e.cover) {
+          releaseCover(e);
+          if (next) { next.owner = e; e.cover = next; }
         }
-        e.pos.addScaledVector(dir, e.speed * dt);
-      } else if (!steady && dist < e.range) {
-        // In position: sidestep between shots so they are not a static target.
-        e.strafeT -= dt;
-        if (e.strafeT <= 0) { e.strafe *= -1; e.strafeT = 1.2 + Math.random() * 2; }
-        const side = new THREE.Vector3(-to.z, 0, to.x).multiplyScalar(e.strafe);
-        if (blocked(e.pos, side, 1, 0.45, world.colliders)) e.strafe *= -1;
-        else e.pos.addScaledVector(side, e.speed * 0.4 * dt);
       }
-    } else {
-      // Lost sight: head for where the player is, around whatever is in the way.
-      let dir = to.clone();
-      if (blocked(e.pos, dir, 1.4, 0.45, world.colliders)) {
-        const left = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(e.strafe);
-        dir = blocked(e.pos, left, 1.4, 0.45, world.colliders) ? left.multiplyScalar(-1) : left;
+      if (e.cover) {
+        // Get there even while shooting is pending; hold still once in place.
+        if (!firing || e.pos.distanceTo(e.cover.pos) > 1.2) moved = steer(e, e.cover.pos, speed, dt);
+      } else if (!firing) {
+        if (dist > e.hold) moved = steer(e, player.pos, speed, dt);
+        else if (dist < e.range) {
+          e.strafeT -= dt;
+          if (e.strafeT <= 0) { e.strafe *= -1; e.strafeT = 1.2 + Math.random() * 2; }
+          const side = new THREE.Vector3(-to.z, 0, to.x).multiplyScalar(e.strafe);
+          if (blocked(e.pos, side, 1, 0.45, world.colliders)) e.strafe *= -1;
+          else { e.pos.addScaledVector(side, speed * 0.4 * dt); moved = side; }
+        }
       }
-      e.pos.addScaledVector(dir, e.speed * 0.75 * dt);
-      faceWant = Math.atan2(dir.x, dir.z);
+    } else if (e.role === "flank") {
+      // Circle to the player's side, swapping sides every few seconds.
+      e.flankT -= dt;
+      if (e.flankT <= 0) {
+        e.flankSide *= -1;
+        e.flankT = 2.5 + Math.random() * 2;
+        callout(e, "FLANKING");
+      }
+      const around = new THREE.Vector3(-to.x, 0, -to.z).applyAxisAngle(UP, e.flankSide * 1.15).multiplyScalar(e.hold);
+      const goal = around.add(player.pos);
+      goal.x = clamp(goal.x, -8.8, 8.8);
+      moved = steer(e, goal, speed * (firing ? 0.55 : 1), dt);
+    } else if (!firing && dist > e.hold) {
+      moved = steer(e, player.pos, speed, dt);
     }
 
     // Keep them off each other.
@@ -1053,19 +1190,43 @@ function updateEnemies(dt) {
     }
     resolve(e.pos, 0.45, world.colliders);
     e.curSpeed += (before.distanceTo(e.pos) / Math.max(dt, 1e-4) - e.curSpeed) * ease(12, dt);
+    const faceWant = sees ? Math.atan2(to.x, to.z) : moved ? Math.atan2(moved.x, moved.z) : e.facing;
     e.facing += wrapPi(faceWant - e.facing) * ease(9, dt);
 
-    // Attack: raise, steady for a beat, fire. Shots can miss, and moving,
-    // sprinting or dodging makes you harder to hit.
+    // Attack: raise and steady, then a burst. Every round can miss, and moving,
+    // sprinting or dodging makes you harder to hit. Empty mags force a reload.
     const inRange = sees && dist < e.range;
-    if (inRange) e.aimHold = 0.5;
-    if (inRange && e.attackT <= 0 && e.windup <= 0 && e.stagger <= 0) e.windup = WINDUP;
-    if (e.windup > 0) {
+    if (inRange && !reloading) e.aimHold = 0.5;
+    if (reloading) {
+      e.reloadT -= dt;
+      if (e.reloadT <= 0) e.ammo = ENEMY[e.type].mag;
+    } else if (e.burstLeft > 0) {
+      e.burstT -= dt;
+      if (e.burstT <= 0) {
+        if (inRange) enemyFire(e, chest, dist, playerSpeed);
+        e.ammo -= 1;
+        e.burstLeft -= 1;
+        e.burstT = ENEMY[e.type].burstGap;
+        if (e.burstLeft === 0 || !inRange) {
+          e.burstLeft = 0;
+          e.attackT = e.cd * (0.85 + Math.random() * 0.3);
+        }
+        if (e.ammo <= 0) {
+          e.burstLeft = 0;
+          e.reloadT = ENEMY_RELOAD;
+          e.aimHold = 0;
+          sfx.enemyReload(dist);
+          callout(e, "RELOADING");
+        }
+      }
+    } else if (e.windup > 0) {
       e.windup -= dt;
       if (e.windup <= 0) {
-        e.attackT = e.cd * (0.85 + Math.random() * 0.3);
-        if (inRange) enemyFire(e, chest, dist, playerSpeed);
+        if (inRange) { e.burstLeft = Math.min(ENEMY[e.type].burst, e.ammo); e.burstT = 0; }
+        else e.attackT = 0.3;
       }
+    } else if (inRange && e.attackT <= 0 && e.stagger <= 0) {
+      e.windup = WINDUP;
     }
 
     e.rig.update(dt, {
@@ -1074,7 +1235,9 @@ function updateEnemies(dt) {
       speed: e.curSpeed,
       aim: e.aimHold > 0,
       aimPoint: chest,
-      kick: e.kick
+      kick: e.kick,
+      pose: reloading ? "reload" : "none",
+      poseT: reloading ? 1 - e.reloadT / ENEMY_RELOAD : 0
     });
   }
 }
@@ -1086,7 +1249,8 @@ function enemyFire(e, chest, dist, playerSpeed) {
   let chance = 0.82 - dist * 0.022;
   if (playerSpeed > 5) chance -= 0.3;
   else if (playerSpeed > 1.5) chance -= 0.14;
-  chance = clamp(chance, 0.12, 0.9);
+  if (ENEMY[e.type].burst > 1) chance -= 0.12;
+  chance = clamp(chance, 0.1, 0.9);
   const hit = player.iframes <= 0 && Math.random() < chance;
   const dir = chest.clone().sub(from).normalize();
   let end;
@@ -1106,10 +1270,10 @@ function enemyFire(e, chest, dist, playerSpeed) {
     sfx.whiz();
   }
   e.kick = 1;
-  fx.muzzle(from, dir, { scale: 1.25 });
+  fx.muzzle(from, dir, { scale: ENEMY[e.type].gun === "heavy" ? 1.6 : 1.2 });
   fx.tracer(from, end, ENEMY[e.type].glow);
   sfx.enemyShot(dist);
-  if (hit) hurtPlayer(e.dmg);
+  if (hit) hurtPlayer(e.dmg, e.pos);
 }
 
 function updateMission() {
@@ -1219,8 +1383,8 @@ function end(win) {
   $("screen-end").hidden = false;
   $("end-title").textContent = win ? "MISSION COMPLETE" : "GHOST DOWN";
   $("end-copy").textContent = win
-    ? `Communications restored. XP ${mission.xp}. No checkpoints — restart replays the full mission.`
-    : "Sector 9 holds. Restart resets health, ammo, cells, waves, and inputs.";
+    ? `Caldosta is back online. XP ${mission.xp}. No checkpoints — restart replays the full mission.`
+    : "The Blackout Crew holds Sector 9. Restart resets health, ammo, cells, waves, and inputs.";
   if (win) sfx.win(); else sfx.lose();
   document.exitPointerLock?.();
 }

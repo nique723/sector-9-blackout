@@ -1,6 +1,6 @@
-# Sector 9: City Under Siege — Phase 1
+# Sector 9: Caldosta Under Siege — Phase 1
 
-Playable mobile-first third-person mission. Mission 01: Blackout. Ghost collects three power cells, clears a patrol, survives three waves, and activates the communications tower.
+Playable mobile-first third-person mission set in Sector 9 of the city of Caldosta. Mission 01: Blackout. The Blackout Crew cut the power; Ghost collects three power cells, clears a patrol, survives three waves, and activates the communications tower.
 
 Static HTML, CSS, and JavaScript. Three.js r170 is loaded from jsDelivr. No build step.
 
@@ -28,9 +28,19 @@ This folder is a static site. On Vercel, set the framework to Other and the outp
 
 Ghost and the enemies are rigged, skinned GLB models with motion-captured idle, walk and run clips (`js/character.js`). The upper body is procedural: the pistol is placed on the line from the barrel to the crosshair and both arms are solved onto it, so the gun, the tracer and the crosshair always agree. Reload, melee, dodge and death are procedural poses, not clips.
 
-**Both models are stand-ins.** `assets/characters/ghost.glb` is the three.js sample soldier (recoloured black, with coat tails added in code) and `assets/characters/enemy.glb` is the three.js sample mannequin. Neither is the Ghost in `assets/ghost-ref.png`.
+**Both models are stand-ins.** `assets/characters/ghost.glb` is the three.js sample soldier. Ghost uses it recoloured black with coat tails added in code; the Blackout Crew uses the same file in its own colours, with glowing armbands and visors per type. Neither is the Ghost in `assets/ghost-ref.png`.
 
-To use the real Ghost: generate a 3D model from the reference art, rig it with a Mixamo-style skeleton, export one GLB containing clips named with "idle", "walk" and "run", and save it over `assets/characters/ghost.glb`. If it faces the wrong way, flip `faces` at the top of `js/character.js`. Remove `mono` and `coat` from the `new Rig(chars.ghost, ...)` call in `js/game.js` once the model carries its own colours and coat.
+Model files are mapped in `MODELS` at the top of `js/character.js`. To use real models: save a rigged GLB in `assets/characters/`, point the entry at it, and include clips named with "idle", "walk" and "run". Optional clips named "hit", "death" (one with "head" in the name is used for headshot kills) and "reload" replace the procedural versions automatically. If a model faces the wrong way, flip its `faces` value. Remove `mono` and `coat` from the `new Rig(chars.ghost, ...)` call in `js/game.js` once Ghost's model carries its own colours and coat.
+
+## Enemies
+
+The Blackout Crew, tuned in the `ENEMY` table in `js/game.js`:
+
+- **Patrol** (red): rifle, single shots. Takes cover beside barricades and dumpsters that sit between it and the player.
+- **Hunter** (cyan): SMG, 3-round bursts on the move. Circles to the player's side and switches sides.
+- **Enforcer** (orange): heavy gun, 4-round bursts. Walks the player down.
+
+All of them raise and steady before firing, every round can miss, and an empty magazine forces a reload. They call out contact, flanking and reloads.
 
 ## Gun feel
 
