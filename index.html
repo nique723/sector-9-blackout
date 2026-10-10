@@ -7,11 +7,11 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="theme-color" content="#07090d" />
   <title>Sector 9 — City Under Siege</title>
-  <link rel="stylesheet" href="css/game.css?v=11" />
+  <link rel="stylesheet" href="css/game.css?v=18" />
 </head>
 <body>
   <div id="app">
-    <div id="build-stamp">BUILD 17</div>
+    <div id="build-stamp">BUILD 18</div>
 
     <canvas id="view"></canvas>
 
@@ -45,11 +45,12 @@
         <div class="pill" id="wave-pill">WAVE — / 3</div>
         <div class="pill" id="cell-pill">CELLS 0 / 3</div>
         <div class="pill" id="xp-pill">XP 0</div>
-        <div class="pill" id="hit-pill">HITS 0</div>
       </div>
 
       <div id="marker" hidden></div>
-      <div id="reticle"></div>
+      <div id="floaters"></div>
+      <div id="reticle"><i class="dot"></i><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i></div>
+      <div id="hitmarker"></div>
       <div id="banner" hidden></div>
       <div id="dmg"></div>
       <div id="fps" hidden>FPS --</div>
@@ -149,6 +150,6 @@
     }
   }
   </script>
-  <script type="module" src="js/game.js?v=17"></script>
+  <script type="module" src="js/game.js?v=18"></script>
 </body>
 </html>

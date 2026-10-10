@@ -1,69 +1,114 @@
 import * as THREE from "three";
 import { Sfx } from "./audio.js";
 import { Input } from "./input.js";
+import { Fx } from "./fx.js";
 import { makeCell, makePickup, resolve, blocked, segmentClear, rayHit } from "./world.js";
 import { loadSector9Street } from "./load-street.js";
-import { createGhost, applyFace, animateGhost, alignWeapon, createEnemy, animateEnemy } from "./actors.js";
+import { loadCharacters, Rig } from "./character.js";
 
 const $ = (id) => document.getElementById(id);
+
+// --- Tuning. Everything that changes how the game feels lives here. ---------
 const MAG = 12;
 const START_RESERVE = 60;
-const FIRE_CD = 0.2;
-const RELOAD_T = 1.45;
+const FIRE_CD = 0.17;          // seconds between shots while FIRE is held
+const RELOAD_T = 1.4;
+const BODY_DMG = 16;
+const HEAD_DMG = 36;
+const MELEE_DMG = 34;
 const MELEE_CD = 0.55;
-const DODGE_T = 0.36;
-const DODGE_CD = 1.15;
+const MELEE_T = 0.3;
+const DODGE_T = 0.38;
+const DODGE_CD = 1.1;
+const DODGE_SPEED = 10.5;
+const RUN_SPEED = 4.3;
+const SPRINT_SPEED = 6.6;
+const AIM_SPEED = 2.8;         // you slow down while the gun is up
+const ACCEL = 30;
+const AIM_HOLD = 0.9;          // gun stays raised this long after the last shot
+const SPREAD_BASE = 0.0025;    // radians
+const SPREAD_MOVE = 0.009;
+const SPREAD_PER_SHOT = 0.011;
+const SPREAD_MAX = 0.05;
+const RECOIL_PITCH = 0.017;    // camera kick per shot, radians
+const FOV_BASE = 58;
+const FOV_AIM = 51;
+const FOV_SPRINT = 63;
+const PITCH_MIN = -0.85;
+const PITCH_MAX = 0.8;
+
+const ENEMY = {
+  patrol: { body: 0x39424d, glow: 0xff3344, scale: 1, hp: 46, speed: 2.6, dmg: 8, range: 11, hold: 6.5, cd: 1.15, xp: 10 },
+  hunter: { body: 0x1f3540, glow: 0x39e0ff, scale: 0.9, hp: 28, speed: 4.2, dmg: 7, range: 8, hold: 3.2, cd: 0.8, xp: 10 },
+  enforcer: { body: 0x4a4038, glow: 0xff8a1e, scale: 1.2, hp: 96, speed: 1.8, dmg: 16, range: 12, hold: 7.5, cd: 1.55, xp: 20 }
+};
+const WINDUP = 0.42;           // enemy raises and steadies before each shot
 
 const settings = loadSettings();
 const input = new Input();
 const sfx = new Sfx();
+const touch = matchMedia("(pointer: coarse)").matches;
+
 let renderer, scene, camera, clock;
-let world, ghost, player, enemies, pickups, flashes, impacts;
+let world, chars, ghost, fx, player, enemies, pickups;
 let mode = "load";
+let pauseReason = null;
 let quality = settings.quality;
 let fpsOn = settings.fps;
 let fpsAcc = 0;
 let fpsFrames = 0;
 let bannerT = 0;
 let camYaw = 0;
-let camPitch = 0.22;
+let camPitch = -0.06;
 let shake = 0;
+let fovKick = 0;
+let aimAmt = 0;
 let mission;
 let interact = null;
-let hitCount = 0;
-let shotTarget = null;
-let recoil = 0;
-let tracer = null;
 let resumeGraceUntil = 0;
-let forcePlay = false;
-const aimDir = new THREE.Vector3();
-const camTarget = new THREE.Vector3();
-const tmp = new THREE.Vector3();
-const muzzle = new THREE.Vector3();
-let aimRay = null;
-let aimNdc = null;
+let hitMarkT = 0;
+let wasFiring = false;
+let floaters = [];
+
+const camPivot = new THREE.Vector3();
+const lookDir = new THREE.Vector3();
+const tmpA = new THREE.Vector3();
+const tmpB = new THREE.Vector3();
+const UP = new THREE.Vector3(0, 1, 0);
+const aimInfo = { point: new THREE.Vector3(), kind: "none", enemy: null, head: false, normal: new THREE.Vector3(0, 1, 0), t: 0 };
+const shotFrame = {
+  right: new THREE.Vector3(), chest: new THREE.Vector3(), aimDir: new THREE.Vector3(),
+  grip: new THREE.Vector3(), gunDir: new THREE.Vector3(), muzzle: new THREE.Vector3()
+};
 
 const CELL_SPOTS = [
   { id: "c1", pos: new THREE.Vector3(-7, 0, 14) },
   { id: "c2", pos: new THREE.Vector3(7, 0, 0) },
   { id: "c3", pos: new THREE.Vector3(0, 0, -27) }
 ];
+const SPAWN_SPOTS = [
+  new THREE.Vector3(-6, 0, 8), new THREE.Vector3(6, 0, -4), new THREE.Vector3(0, 0, -16),
+  new THREE.Vector3(4, 0, 20), new THREE.Vector3(-5, 0, -30), new THREE.Vector3(5, 0, 32)
+];
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const ease = (rate, dt) => 1 - Math.exp(-rate * dt);
+const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
 function loadSettings() {
+  const base = { sensitivity: 1, quality: "medium", volume: 0.7, fps: false };
   try {
-    return Object.assign({ sensitivity: 1, quality: "medium", volume: 0.7, fps: false }, JSON.parse(localStorage.getItem("s9-settings") || "{}"));
+    return Object.assign(base, JSON.parse(localStorage.getItem("s9-settings") || "{}"));
   } catch {
-    return { sensitivity: 1, quality: "medium", volume: 0.7, fps: false };
+    return base;
   }
 }
 
 function saveSettings() {
-  localStorage.setItem("s9-settings", JSON.stringify({
-    sensitivity: input.sensitivity,
-    quality,
-    volume: sfx.volume,
-    fps: fpsOn
-  }));
+  try {
+    localStorage.setItem("s9-settings", JSON.stringify({ sensitivity: input.sensitivity, quality, volume: sfx.volume, fps: fpsOn }));
+  } catch { /* private mode */ }
 }
 
 async function boot() {
@@ -74,17 +119,18 @@ async function boot() {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
     scene = new THREE.Scene();
-    camera = new THREE.PerspectiveCamera(58, 1, 0.1, 160);
-    aimRay = new THREE.Raycaster();
-    aimNdc = new THREE.Vector2();
+    camera = new THREE.PerspectiveCamera(FOV_BASE, 1, 0.1, 160);
     clock = new THREE.Clock();
     applyQuality();
-    world = await loadSector9Street(scene, "assets/sector9-street/");
-    ghost = createGhost();
-    applyFace(ghost.parts);
+    [world, chars] = await Promise.all([
+      loadSector9Street(scene, "assets/sector9-street/"),
+      loadCharacters("assets/characters/")
+    ]);
+    ghost = new Rig(chars.ghost, { height: 1.84, weapon: "pistol", mono: 0x5c5e66, glow: 0xb00f1c, glowPower: 0.45, coat: true });
     scene.add(ghost.group);
-    flashes = [];
-    impacts = makeImpacts();
+    fx = new Fx(scene, quality);
+    enemies = [];
+    pickups = [];
     resetMission();
     input.bind();
     input.sensitivity = settings.sensitivity;
@@ -93,116 +139,94 @@ async function boot() {
     resize();
     window.addEventListener("resize", resize);
     document.addEventListener("visibilitychange", onVis);
+    // Compile every shader up front so the first shot and first enemy do not hitch.
+    const warm = makeEnemy("patrol");
+    warm.rig.group.position.set(0, -50, 0);
+    const hidden = [];
+    fx.root.traverse((o) => { if (!o.visible) { hidden.push(o); o.visible = true; } });
+    renderer.compile(scene, camera);
+    hidden.forEach((o) => { o.visible = false; });
+    removeEnemy(warm);
     $("load-status").textContent = "District ready.";
     $("screen-load").hidden = true;
     $("screen-start").hidden = false;
     mode = "start";
     window.S9 = { get state() { return snapshot(); } };
-    window.S9.fire = () => tryFire();
-    window.S9.placeTarget = () => {
-      const forward = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
-      const spot = player.pos.clone().addScaledVector(forward, 8);
-      spot.y = 1.25;
-      const box = new THREE.Mesh(
-        new THREE.BoxGeometry(1.4, 2.0, 0.25),
-        new THREE.MeshStandardMaterial({ color: 0xd24a3a, emissive: 0x5a140e, emissiveIntensity: 0.4 })
-      );
-      box.position.copy(spot);
-      scene.add(box);
-      shotTarget = {
-        mesh: box,
-        minX: spot.x - 0.75,
-        maxX: spot.x + 0.75,
-        minY: 0.2,
-        maxY: 2.3,
-        minZ: spot.z - 0.75,
-        maxZ: spot.z + 0.75
-      };
-      camera.lookAt(spot);
-      return { x: spot.x, y: spot.y, z: spot.z };
-    };
-    window.S9.startRec = () => {
-      const stream = $("view").captureStream(30);
-      const rec = new MediaRecorder(stream, { mimeType: "video/webm;codecs=vp8" });
-      window.S9._chunks = [];
-      window.S9._recDone = null;
-      rec.ondataavailable = (e) => { if (e.data.size) window.S9._chunks.push(e.data); };
-      rec.onstop = () => { window.S9._recDone = true; };
-      rec.start(100);
-      window.S9._rec = rec;
-    };
-    window.S9.stopRec = () => new Promise((resolve) => {
-      const rec = window.S9._rec;
-      if (!rec) return resolve("");
-      rec.onstop = async () => {
-        const blob = new Blob(window.S9._chunks, { type: "video/webm" });
-        const buf = await blob.arrayBuffer();
-        const bytes = new Uint8Array(buf);
-        let raw = "";
-        const step = 0x8000;
-        for (let i = 0; i < bytes.length; i += step) raw += String.fromCharCode(...bytes.subarray(i, i + step));
-        window.S9._lastB64 = btoa(raw);
-        resolve(window.S9._lastB64.length);
-      };
-      rec.stop();
-    });
-    window.S9.frameClose = () => {
-      player.state = "aim";
-      const head = player.pos.clone().add(new THREE.Vector3(0, 1.4, 0));
-      camera.position.set(player.pos.x + 1.35, 1.85, player.pos.z + 2.6);
-      camera.lookAt(head.x + 0.15, 1.35, player.pos.z - 8);
-    };
-    if (location.hash === "#test") {
-      window.S9.debug = {
-        teleport: (x, z) => { player.pos.set(x, 0, z); },
-        killAll: () => enemies.forEach((e) => { e.hp = 0; e.dead = true; }),
-        hurt: (n) => { player.hp = Math.max(0, player.hp - n); player.hurtT = 0.2; },
-        emptyMag: () => { player.mag = 0; }
-      };
-    }
+    if (location.hash === "#test") installDebug();
     requestAnimationFrame(loop);
   } catch (err) {
     $("load-error").hidden = false;
     $("load-error").textContent = "Asset/init error: " + err.message;
-    $("build-stamp").textContent = "BUILD 8 ERROR";
+    $("build-stamp").textContent += " ERROR";
     console.error(err);
   }
+}
+
+// Developer hooks, only with #test on the URL.
+function installDebug() {
+  window.S9.debug = {
+    teleport: (x, z) => { player.pos.set(x, 0, z); },
+    look: (yaw, pitch) => { camYaw = yaw; camPitch = pitch; },
+    spawn: (type, x, z) => { const e = makeEnemy(type); e.pos.set(x, 0, z); e.passive = true; enemies.push(e); mission.waveLive = false; return enemies.length; },
+    wake: () => enemies.forEach((e) => { e.passive = false; }),
+    killAll: () => enemies.forEach((e) => { if (!e.dead) damageEnemy(e, 999, false, e.pos.clone().setY(1.2), new THREE.Vector3(0, 0, 1)); }),
+    hurt: (n) => hurtPlayer(n),
+    emptyMag: () => { player.mag = 0; },
+    aim: () => ({ kind: aimInfo.kind, head: aimInfo.head, t: aimInfo.t }),
+    enemies: () => enemies.map((e) => ({ type: e.type, hp: e.hp, dead: e.dead })),
+    freeze: (on = true) => { window.S9.frozen = on; },
+    step: (n, dt = 1 / 60) => { for (let i = 0; i < n; i++) if (mode === "play") update(dt); },
+    cam: (x, y, z, tx, ty, tz) => { window.S9.freeCam = x === undefined ? null : [x, y, z, tx, ty, tz]; }
+  };
 }
 
 function applyQuality() {
   const cap = quality === "low" ? 1 : quality === "medium" ? 1.25 : 1.5;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, cap));
-  renderer.shadowMap.enabled = quality !== "low";
-  renderer.shadowMap.type = THREE.BasicShadowMap;
 }
 
 function resetMission() {
+  for (const e of enemies) e.rig.dispose();
   enemies = [];
+  for (const p of pickups) scene.remove(p.mesh);
   pickups = [];
-  for (const child of [...scene.children]) {
-    if (child.userData && child.userData.ephemeral) scene.remove(child);
-  }
+  floaters.forEach((f) => f.el.remove());
+  floaters = [];
+  fx.reset();
   player = {
     pos: new THREE.Vector3(0, 0, 30),
-    yaw: Math.PI,
+    vel: new THREE.Vector3(),
+    facing: Math.PI,
+    lower: 0,
+    backward: false,
     hp: 100,
     mag: MAG,
     reserve: START_RESERVE,
     weapon: "pistol",
     state: "idle",
     fireCd: 0,
+    aimHold: 0,
+    bloom: 0,
+    recoilP: 0,
+    recoilY: 0,
+    kick: 0,
+    snapAim: false,
     reloadT: 0,
-    reloadPending: false,
+    meleeT: 0,
     meleeCd: 0,
     dodgeCd: 0,
     dodgeT: 0,
+    dodgeDir: new THREE.Vector3(),
     iframes: 0,
     hurtT: 0,
     deadT: 0
   };
-  camYaw = player.yaw;
-  camPitch = 0.22;
-  ghost.group.position.copy(player.pos);
+  camYaw = player.facing;
+  camPitch = -0.06;
+  aimAmt = 0;
+  fovKick = 0;
+  shake = 0;
+  camPivot.copy(player.pos).setY(1.52);
   mission = {
     phase: "cell1",
     cells: 0,
@@ -216,21 +240,15 @@ function resetMission() {
     xp: 0,
     objective: "COLLECT THE FIRST POWER CELL"
   };
-  CELL_SPOTS.forEach((c) => {
-    const item = makeCell(scene, c.pos, c.id);
-    item.mesh.userData.ephemeral = true;
-    pickups.push(item);
-  });
-  pickups.push(tag(makePickup(scene, new THREE.Vector3(6, 0, 22), "ammo")));
-  pickups.push(tag(makePickup(scene, new THREE.Vector3(-6, 0, -12), "health")));
+  CELL_SPOTS.forEach((c) => pickups.push(makeCell(scene, c.pos, c.id)));
+  pickups.push(makePickup(scene, new THREE.Vector3(6, 0, 22), "ammo"));
+  pickups.push(makePickup(scene, new THREE.Vector3(-6, 0, -12), "health"));
   input.clearHeld();
+  updateCamera(1);
+  updateAim();
+  poseGhost(0);
   setBanner("ENTER SECTOR 9");
   syncHud();
-}
-
-function tag(p) {
-  p.mesh.userData.ephemeral = true;
-  return p;
 }
 
 function bindUi() {
@@ -242,17 +260,13 @@ function bindUi() {
       mode = "pause";
       pauseReason = "portrait";
       input.blocked = true;
-      const gate = $("portrait");
-      if (gate) gate.hidden = false;
+      $("portrait").hidden = false;
       return;
     }
     beginPlay();
   };
   $("btn-resume").onclick = resume;
-  const enter = $("btn-unpause-vis");
-  if (enter) enter.onclick = resume;
-  const force = $("btn-force-play");
-  if (force) force.onclick = resume;
+  $("btn-unpause-vis").onclick = resume;
   $("btn-restart").onclick = restart;
   $("btn-again").onclick = restart;
   $("sens").value = settings.sensitivity;
@@ -261,14 +275,15 @@ function bindUi() {
   $("quality").onchange = () => {
     quality = $("quality").value;
     saveSettings();
-    setBanner("GRAPHICS APPLY ON RESTART");
+    applyQuality();
+    resize();
   };
   $("volume").value = settings.volume;
   $("volume").oninput = () => { sfx.volume = Number($("volume").value); saveSettings(); };
   $("show-fps").checked = fpsOn;
   $("show-fps").onchange = () => { fpsOn = $("show-fps").checked; $("fps").hidden = !fpsOn; saveSettings(); };
   $("view").addEventListener("click", () => {
-    if (mode === "play" && !matchMedia("(pointer: coarse)").matches && document.pointerLockElement !== $("view")) {
+    if (mode === "play" && !touch && document.pointerLockElement !== $("view")) {
       $("view").requestPointerLock?.();
     }
   });
@@ -314,15 +329,9 @@ function pause(reason) {
   hide("screen-pause");
   hide("resume-lock");
   hide("portrait");
-  if (reason === "portrait") {
-    const gate = $("portrait");
-    if (gate) gate.hidden = false;
-  } else if (reason === "tab") {
-    const lock = $("resume-lock");
-    if (lock) lock.hidden = false;
-  } else {
-    $("screen-pause").hidden = false;
-  }
+  if (reason === "portrait") $("portrait").hidden = false;
+  else if (reason === "tab") $("resume-lock").hidden = false;
+  else $("screen-pause").hidden = false;
   document.exitPointerLock?.();
 }
 
@@ -333,8 +342,8 @@ function resume() {
     pauseReason = "portrait";
     input.blocked = true;
     hide("resume-lock");
-    const gate = $("portrait");
-    if (gate) gate.hidden = false;
+    hide("screen-pause");
+    $("portrait").hidden = false;
     return;
   }
   beginPlay();
@@ -352,8 +361,15 @@ function loop() {
   requestAnimationFrame(loop);
   const dt = Math.min(clock.getDelta(), 0.05);
   if (isPortrait() && mode === "play") pause("portrait");
-  if (mode === "play") update(dt);
-  else if (ghost) animateGhost(ghost.parts, player?.state || "idle", clock.elapsedTime, false);
+  else if (!isPortrait() && mode === "pause" && pauseReason === "portrait") resume();
+  if (mode === "play") { if (!(window.S9 && window.S9.frozen)) update(dt); }
+  else if (mode === "start") poseGhost(dt);
+  const free = window.S9 && window.S9.freeCam;
+  if (free) {
+    // Debug only: view the scene from a fixed offset. Aiming still uses the game camera.
+    camera.position.set(player.pos.x + free[0], free[1], player.pos.z + free[2]);
+    camera.lookAt(player.pos.x + free[3], free[4], player.pos.z + free[5]);
+  }
   renderer.render(scene, camera);
   if (fpsOn) {
     fpsAcc += dt;
@@ -368,80 +384,142 @@ function loop() {
 }
 
 function update(dt) {
-  if (input.take("pause")) pause("user");
+  if (input.take("pause")) { pause("user"); return; }
+
+  // --- Look. On touch, the stick slows a little while the crosshair is on a
+  // target so a thumb can actually hold it there.
   const look = input.consumeLook();
-  camYaw -= look.dx;
-  camPitch = Math.max(-0.55, Math.min(0.85, camPitch - look.dy));
-  player.yaw = camYaw;
+  const friction = touch && aimInfo.enemy ? 0.55 : 1;
+  camYaw -= look.dx * friction;
+  camPitch = clamp(camPitch - look.dy * friction, PITCH_MIN, PITCH_MAX);
 
   if (player.hp <= 0) {
     player.deadT += dt;
     player.state = "dead";
-    animateGhost(ghost.parts, "dead", clock.elapsedTime, false);
-    if (player.deadT > 1.1) end(false);
+    player.vel.set(0, 0, 0);
+    poseGhost(dt);
+    updateCamera(dt);
+    updateEnemies(dt);
+    fx.update(dt);
+    updateFloaters(dt);
+    if (player.deadT > 1.6) end(false);
     return;
   }
 
+  // --- Timers.
   player.fireCd = Math.max(0, player.fireCd - dt);
   player.meleeCd = Math.max(0, player.meleeCd - dt);
+  player.meleeT = Math.max(0, player.meleeT - dt);
   player.dodgeCd = Math.max(0, player.dodgeCd - dt);
+  player.dodgeT = Math.max(0, player.dodgeT - dt);
   player.iframes = Math.max(0, player.iframes - dt);
   player.hurtT = Math.max(0, player.hurtT - dt);
-  recoil = Math.max(0, recoil - dt * 1.8);
+  player.aimHold = Math.max(0, player.aimHold - dt);
+  player.bloom = Math.max(0, player.bloom - dt * (0.02 + player.bloom * 4.5));
+  player.recoilP *= Math.exp(-dt * 8);
+  player.recoilY *= Math.exp(-dt * 8);
+  player.kick *= Math.exp(-dt * 16);
+  fovKick *= Math.exp(-dt * 12);
   if (player.reloadT > 0) {
     player.reloadT = Math.max(0, player.reloadT - dt);
-    if (player.reloadT === 0 && player.reloadPending) {
-      const need = MAG - player.mag;
-      const take = Math.min(need, player.reserve);
+    if (player.reloadT === 0) {
+      const take = Math.min(MAG - player.mag, player.reserve);
       player.mag += take;
       player.reserve -= take;
-      player.reloadPending = false;
     }
   }
-  if (player.dodgeT > 0) player.dodgeT = Math.max(0, player.dodgeT - dt);
 
+  const firing = input.firing();
+  const pistolUp = player.weapon === "pistol" && player.reloadT <= 0 && player.dodgeT <= 0;
+  if (firing && pistolUp) player.aimHold = AIM_HOLD;
+  const aiming = pistolUp && player.aimHold > 0;
+
+  // --- Move. Velocity eases towards the stick instead of snapping to it.
   const wish = input.wishMove();
-  const sprint = input.sprinting() && player.dodgeT <= 0;
-  const speed = player.dodgeT > 0 ? 11 : sprint ? 7.2 : 4.6;
-  const forward = new THREE.Vector3(Math.sin(camYaw), 0, Math.cos(camYaw));
-  const right = new THREE.Vector3(forward.z, 0, -forward.x);
-  const move = new THREE.Vector3();
-  move.addScaledVector(right, wish.x);
-  move.addScaledVector(forward, -wish.y);
-  if (move.lengthSq() > 0) move.normalize();
-  player.pos.addScaledVector(move, speed * dt);
-  resolve(player.pos, 0.42, world.colliders);
-  ghost.group.position.copy(player.pos);
-  ghost.group.rotation.y = player.yaw;
+  const fwdX = Math.sin(camYaw);
+  const fwdZ = Math.cos(camYaw);
+  const move = tmpA.set(-fwdZ * wish.x - fwdX * wish.y, 0, fwdX * wish.x - fwdZ * wish.y);
+  const stick = Math.min(1, move.length());
+  if (stick > 0) move.normalize();
+  const sprint = input.sprinting() && !aiming && stick > 0.2 && player.dodgeT <= 0;
 
-  if (input.take("dodge") && player.dodgeCd <= 0) {
+  if (input.take("dodge") && player.dodgeCd <= 0 && player.reloadT <= 0) {
     player.dodgeT = DODGE_T;
     player.dodgeCd = DODGE_CD;
-    player.iframes = 0.42;
-    sfx.melee();
+    player.iframes = DODGE_T + 0.06;
+    player.aimHold = 0;
+    if (stick > 0.2) player.dodgeDir.copy(move);
+    else player.dodgeDir.set(Math.sin(player.facing), 0, Math.cos(player.facing));
+    sfx.dodge();
   }
+
+  if (player.dodgeT > 0) {
+    player.vel.copy(player.dodgeDir).multiplyScalar(DODGE_SPEED * (0.55 + 0.45 * (player.dodgeT / DODGE_T)));
+  } else {
+    const top = aiming ? AIM_SPEED : sprint ? SPRINT_SPEED : RUN_SPEED;
+    const want = tmpB.copy(move).multiplyScalar(top * stick);
+    const dv = want.sub(player.vel);
+    const step = ACCEL * dt;
+    if (dv.length() <= step) player.vel.add(dv);
+    else player.vel.addScaledVector(dv.normalize(), step);
+  }
+  const before = tmpB.copy(player.pos);
+  player.pos.addScaledVector(player.vel, dt);
+  resolve(player.pos, 0.42, world.colliders);
+  // If a wall stopped us, drop the speed so the legs stop running in place.
+  const moved = before.distanceTo(player.pos);
+  const speed = dt > 0 ? Math.min(player.vel.length(), moved / dt + 0.3) : 0;
+  const moving = speed > 0.25;
+
+  // --- Camera first, so this frame's shot uses this frame's view.
+  updateCamera(dt, aiming, sprint && moving);
+  updateAim();
+
+  // --- Actions.
   if (input.take("reload")) tryReload();
-  if (input.take("weapon")) {
+  if (input.take("weapon") && player.reloadT <= 0) {
     player.weapon = player.weapon === "pistol" ? "knife" : "pistol";
+    player.aimHold = 0;
     setBanner(player.weapon === "knife" ? "KNIFE READY" : "PISTOL READY");
   }
-  if (input.take("melee") || (player.weapon === "knife" && input.firing() && player.meleeCd <= 0)) doMelee();
-  if (player.weapon === "pistol" && input.firing()) tryFire();
+  if (input.take("melee") || (player.weapon === "knife" && firing)) doMelee();
+  if (player.weapon === "pistol" && firing) tryFire(!wasFiring);
+  wasFiring = firing;
   if (input.take("use")) tryUse();
 
-  const moving = move.lengthSq() > 0.01;
-  player.state = player.hp <= 0 ? "dead" : player.dodgeT > 0 ? "dodge" : player.reloadT > 0 ? "reload" : player.fireCd > 0.12 ? "shoot" : (input.firing() ? "aim" : moving ? (sprint ? "sprint" : "move") : "idle");
-  if (window.S9 && window.S9.holdCam) player.state = player.fireCd > 0.12 ? "shoot" : "aim";
-  animateGhost(ghost.parts, player.state, clock.elapsedTime, moving && player.dodgeT <= 0);
-  if (player.state === "aim" || player.state === "shoot") {
-    alignWeapon(ghost.parts, crosshairAimPoint(), recoil);
+  // --- Body. Aiming squares the chest to the crosshair and lets the legs
+  // follow the stick; otherwise the whole body turns into the run.
+  const squared = aiming || player.meleeT > 0;
+  let lowerWant = 0;
+  player.backward = false;
+  if (player.dodgeT > 0) {
+    player.facing = Math.atan2(player.dodgeDir.x, player.dodgeDir.z);
+  } else if (squared) {
+    player.facing += wrapPi(camYaw - player.facing) * (player.snapAim ? 1 : ease(24, dt));
+    if (moving) {
+      let off = wrapPi(Math.atan2(player.vel.x, player.vel.z) - player.facing);
+      if (Math.abs(off) > 1.75) {
+        player.backward = true;
+        off = wrapPi(off - Math.PI);
+      }
+      lowerWant = clamp(off, -1.05, 1.05);
+    }
+  } else if (moving) {
+    player.facing += wrapPi(Math.atan2(player.vel.x, player.vel.z) - player.facing) * ease(13, dt);
   }
-  updateCamera(dt);
+  player.lower += (lowerWant - player.lower) * ease(14, dt);
+
+  player.state = player.dodgeT > 0 ? "dodge" : player.reloadT > 0 ? "reload" : player.meleeT > 0 ? "melee" : aiming ? "aim" : moving ? (sprint ? "sprint" : "move") : "idle";
+  poseGhost(dt, speed, aiming);
+  player.snapAim = false;
+  if (ghost.stepped && player.dodgeT <= 0) sfx.step();
+
   updateEnemies(dt);
   updatePickups(dt);
   updateMission();
-  updateFx(dt);
-  syncHud();
+  fx.update(dt);
+  updateFloaters(dt);
+  syncHud(dt, speed);
   $("dmg").classList.toggle("on", player.hurtT > 0);
   $("btn-sprint").classList.toggle("on", input.sprint);
   if (bannerT > 0) {
@@ -450,140 +528,334 @@ function update(dt) {
   }
 }
 
-function updateCamera(dt) {
-  if (window.S9 && window.S9.holdCam) return;
-  const shoulder = 0.85;
-  const dist = 2.15;
-  const forward = new THREE.Vector3(Math.sin(camYaw), 0, Math.cos(camYaw));
-  const right = new THREE.Vector3(forward.z, 0, -forward.x);
-  const lookDir = new THREE.Vector3(
-    Math.sin(camYaw) * Math.cos(camPitch),
-    Math.sin(camPitch),
-    Math.cos(camYaw) * Math.cos(camPitch)
-  );
-  const head = player.pos.clone().add(new THREE.Vector3(0, 1.45, 0));
-  const aim = head.clone().addScaledVector(lookDir, 9);
-  const desired = head.clone()
-    .addScaledVector(forward, -dist)
-    .addScaledVector(right, shoulder)
-    .add(new THREE.Vector3(0, 0.55, 0));
-  const dir = desired.clone().sub(head);
-  const len = dir.length();
-  dir.normalize();
-  const hit = rayHit(head, dir, len, world.colliders);
-  const used = hit ? Math.max(1.05, hit.t - 0.3) : len;
-  camTarget.copy(head).addScaledVector(dir, used);
+function poseGhost(dt, speed = 0, aiming = false) {
+  let pose = "none";
+  let poseT = 0;
+  if (player.hp <= 0) { pose = "dead"; poseT = player.deadT / 0.55; }
+  else if (player.dodgeT > 0) { pose = "dodge"; poseT = 1 - player.dodgeT / DODGE_T; }
+  else if (player.reloadT > 0) { pose = "reload"; poseT = 1 - player.reloadT / RELOAD_T; }
+  else if (player.meleeT > 0) { pose = "melee"; poseT = 1 - player.meleeT / MELEE_T; }
+  ghost.update(dt, {
+    pos: player.pos,
+    facing: player.facing,
+    lower: player.lower,
+    backward: player.backward,
+    speed,
+    aim: aiming,
+    aimPoint: aimInfo.point,
+    kick: player.kick,
+    pose,
+    poseT,
+    knife: player.weapon === "knife" || player.meleeT > 0,
+    snapAim: player.snapAim
+  });
+}
+
+// Over-the-right-shoulder camera. Ghost sits left of centre so the crosshair,
+// and the right thumb, are never on top of him.
+function updateCamera(dt, aiming = false, sprinting = false) {
+  aimAmt += ((aiming ? 1 : 0) - aimAmt) * ease(11, dt);
+  const fovWant = lerp(sprinting ? FOV_SPRINT : FOV_BASE, FOV_AIM, aimAmt) + fovKick;
+  camera.fov += (fovWant - camera.fov) * ease(10, dt);
+  camera.updateProjectionMatrix();
+
+  const yaw = camYaw + player.recoilY;
+  const pitch = clamp(camPitch + player.recoilP, PITCH_MIN, PITCH_MAX + 0.1);
+  lookDir.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
+  const right = tmpA.set(-Math.cos(yaw), 0, Math.sin(yaw));
+
+  tmpB.copy(player.pos).setY(player.pos.y + 1.52);
+  camPivot.x = tmpB.x;
+  camPivot.z = tmpB.z;
+  camPivot.y += (tmpB.y - camPivot.y) * ease(14, dt);
+
+  const dist = lerp(3.3, 2.45, aimAmt);
+  const side = lerp(0.72, 0.6, aimAmt);
+  const desired = new THREE.Vector3().copy(camPivot)
+    .addScaledVector(right, side)
+    .addScaledVector(lookDir, -dist);
+  desired.y += 0.2;
+  const arm = desired.clone().sub(camPivot);
+  const len = arm.length();
+  arm.divideScalar(len);
+  const hit = rayHit(camPivot, arm, len + 0.25, world.colliders);
+  const used = hit ? Math.max(0.6, hit.t - 0.25) : len;
+  camera.position.copy(camPivot).addScaledVector(arm, used);
+  if (camera.position.y < 0.3) camera.position.y = 0.3;
   if (shake > 0) {
-    camTarget.x += (Math.random() - 0.5) * shake;
-    camTarget.y += (Math.random() - 0.5) * shake;
-    shake = Math.max(0, shake - dt * 1.4);
+    camera.position.x += (Math.random() - 0.5) * shake;
+    camera.position.y += (Math.random() - 0.5) * shake;
+    shake = Math.max(0, shake - dt * 1.2);
   }
-  camera.position.lerp(camTarget, 1 - Math.pow(0.001, dt));
-  camera.lookAt(aim);
-  camera.getWorldDirection(aimDir);
+  camera.lookAt(tmpB.copy(camera.position).add(lookDir));
+  camera.updateMatrixWorld();
 }
 
-function crosshairAimPoint() {
-  aimNdc.set(0, 0.08);
-  aimRay.setFromCamera(aimNdc, camera);
-  const wall = rayHit(aimRay.ray.origin, aimRay.ray.direction, 48, world.colliders);
-  return aimRay.ray.origin.clone().addScaledVector(aimRay.ray.direction, wall ? wall.t : 42);
+// --- Ray casting -----------------------------------------------------------
+
+function raySphere(o, d, c, r) {
+  const ox = o.x - c.x, oy = o.y - c.y, oz = o.z - c.z;
+  const b = ox * d.x + oy * d.y + oz * d.z;
+  const h = b * b - (ox * ox + oy * oy + oz * oz - r * r);
+  if (h < 0) return -1;
+  return -b - Math.sqrt(h);
 }
 
-function tryFire() {
-  if (player.reloadT > 0 || player.fireCd > 0 || player.dodgeT > 0) return;
-  if (player.mag <= 0) {
-    tryReload();
-    return;
+// Vertical capsule from (x, y0, z) to (x, y1, z).
+function rayCapsule(o, d, x, z, y0, y1, r) {
+  const bay = y1 - y0;
+  const oax = o.x - x, oay = o.y - y0, oaz = o.z - z;
+  const baba = bay * bay;
+  const bard = bay * d.y;
+  const baoa = bay * oay;
+  const rdoa = d.x * oax + d.y * oay + d.z * oaz;
+  const oaoa = oax * oax + oay * oay + oaz * oaz;
+  const a = baba - bard * bard;
+  const b = baba * rdoa - baoa * bard;
+  const c = baba * oaoa - baoa * baoa - r * r * baba;
+  const h = b * b - a * c;
+  if (h < 0 || Math.abs(a) < 1e-9) return -1;
+  const t = (-b - Math.sqrt(h)) / a;
+  const y = baoa + t * bard;
+  if (y > 0 && y < baba) return t;
+  const cy = y <= 0 ? y0 : y1;
+  return raySphere(o, d, { x, y: cy, z }, r);
+}
+
+// First thing a ray touches: enemy (head or body), wall, or the street.
+// `pad` fattens enemy hit shapes; used for a little bullet magnetism on touch.
+function trace(origin, dir, maxDist, pad, out) {
+  let best = maxDist;
+  out.kind = "none";
+  out.enemy = null;
+  out.head = false;
+  out.normal.copy(dir).negate();
+  const wall = rayHit(origin, dir, maxDist, world.colliders);
+  if (wall && wall.t < best) {
+    best = wall.t;
+    out.kind = "wall";
+    out.normal.copy(wall.normal);
   }
-  player.mag -= 1;
-  player.fireCd = FIRE_CD;
-  recoil = 0.08;
-  sfx.shot();
-  shake = Math.min(0.1, shake + 0.04);
-  alignWeapon(ghost.parts, crosshairAimPoint(), recoil);
-  ghost.parts.muzzle.updateWorldMatrix(true, false);
-  ghost.parts.muzzle.getWorldPosition(muzzle);
-  const barrelDir = new THREE.Vector3(0, 0, 1).applyQuaternion(ghost.parts.muzzle.getWorldQuaternion(new THREE.Quaternion()));
-  const aimPoint = crosshairAimPoint();
-  const shotDir = aimPoint.clone().sub(muzzle);
-  const span = shotDir.length();
-  if (span < 0.05) return;
-  shotDir.normalize();
-  const align = barrelDir.dot(shotDir);
-  window.S9.lastShot = { align: Number(align.toFixed(3)), span: Number(span.toFixed(2)) };
-  const wall = rayHit(muzzle, shotDir, Math.min(42, span + 0.2), world.colliders);
-  let best = wall ? wall.t : Math.min(42, span);
-  let hitEnemy = null;
-  let hitTarget = false;
-  if (shotTarget) {
-    const center = shotTarget.mesh.position.clone();
-    const toCenter = center.clone().sub(muzzle);
-    const dist = toCenter.length();
-    toCenter.normalize();
-    const aimed = toCenter.dot(shotDir);
-    if (aimed > 0.96 && dist < best) {
-      best = dist;
-      hitTarget = true;
+  if (dir.y < -1e-4) {
+    const tg = -origin.y / dir.y;
+    if (tg > 0 && tg < best) {
+      best = tg;
+      out.kind = "ground";
+      out.normal.set(0, 1, 0);
     }
   }
   for (const e of enemies) {
     if (e.dead) continue;
-    const to = e.pos.clone().setY(1.2).sub(muzzle);
-    const dist = to.length();
-    if (dist > best) continue;
-    const dir = to.clone().normalize();
-    if (dir.dot(shotDir) < 0.985) continue;
-    const lateral = to.addScaledVector(shotDir, -dist).length();
-    if (lateral < 0.55) {
-      best = dist;
-      hitEnemy = e;
+    const s = e.scale;
+    const th = raySphere(origin, dir, { x: e.pos.x, y: 1.66 * s, z: e.pos.z }, 0.15 * s + pad * 0.6);
+    const tb = rayCapsule(origin, dir, e.pos.x, e.pos.z, 0.3 * s, 1.36 * s, 0.27 * s + pad);
+    let t = -1;
+    let head = false;
+    if (th > 0 && (tb < 0 || th <= tb + 0.12)) { t = th; head = true; }
+    else if (tb > 0) t = tb;
+    if (t > 0 && t < best) {
+      best = t;
+      out.kind = "enemy";
+      out.enemy = e;
+      out.head = head;
+      out.normal.copy(dir).negate();
     }
   }
-  const impactAt = muzzle.clone().addScaledVector(shotDir, Math.max(0.35, best));
-  spawnFlash(muzzle);
-  spawnTracer(muzzle, impactAt);
-  spawnImpact(impactAt, hitEnemy || hitTarget ? 0xff4455 : 0xffe0a0);
-  if (hitTarget) {
-    hitCount += 1;
-    spawnMark(impactAt);
-    syncHud();
+  out.t = best;
+  out.point.copy(origin).addScaledVector(dir, best);
+  return out;
+}
+
+// What the crosshair is on right now. The ray starts just past Ghost so the
+// camera never targets something sitting between the lens and his back.
+function updateAim(spread = 0, out = aimInfo) {
+  const dir = camera.getWorldDirection(tmpA);
+  if (spread > 0) {
+    const a = Math.random() * Math.PI * 2;
+    const r = Math.sqrt(Math.random()) * spread;
+    const camRight = tmpB.setFromMatrixColumn(camera.matrixWorld, 0);
+    dir.addScaledVector(camRight, Math.cos(a) * r);
+    dir.addScaledVector(tmpB.setFromMatrixColumn(camera.matrixWorld, 1), Math.sin(a) * r);
+    dir.normalize();
   }
-  if (hitEnemy) damageEnemy(hitEnemy, 15);
-  if (player.mag === 0) tryReload();
+  const skip = Math.max(0.5, camera.position.distanceTo(camPivot) * 0.9);
+  const origin = camera.position.clone().addScaledVector(dir, skip);
+  trace(origin, dir, 70, touch ? 0.1 : 0.03, out);
+  out.t += skip;
+  return out;
+}
+
+// --- Player weapons --------------------------------------------------------
+
+const shotInfo = { point: new THREE.Vector3(), kind: "none", enemy: null, head: false, normal: new THREE.Vector3(), t: 0 };
+
+function tryFire(pressed) {
+  if (player.reloadT > 0 || player.fireCd > 0 || player.dodgeT > 0) return;
+  if (player.mag <= 0) {
+    if (player.reserve > 0) tryReload();
+    else if (pressed) { sfx.dry(); setBanner("OUT OF AMMO"); }
+    return;
+  }
+  player.mag -= 1;
+  player.fireCd = FIRE_CD;
+  player.aimHold = AIM_HOLD;
+  player.snapAim = true;
+
+  // Where the round goes: the crosshair, plus spread from movement and from
+  // how fast you are pulling the trigger.
+  const moveSpread = clamp(player.vel.length() / RUN_SPEED, 0, 1) * SPREAD_MOVE;
+  const hit = updateAim(SPREAD_BASE + moveSpread + player.bloom, shotInfo);
+
+  // It leaves from the barrel, so cover in front of the gun still stops it.
+  ghost.aimFrame(player.pos, camYaw, hit.point, shotFrame);
+  const muzzle = shotFrame.muzzle;
+  const dir = tmpA.copy(hit.point).sub(muzzle);
+  const span = dir.length();
+  dir.normalize();
+  let end = hit.point;
+  let kind = hit.kind;
+  let normal = hit.normal;
+  let target = hit.enemy;
+  const cover = span > 0.3 ? rayHit(muzzle, dir, span - 0.12, world.colliders) : null;
+  if (cover) {
+    end = cover.point;
+    kind = "wall";
+    normal = cover.normal;
+    target = null;
+  }
+
+  fx.muzzle(muzzle, dir, { light: true });
+  fx.tracer(muzzle, end);
+  fx.casing(tmpB.copy(muzzle).addScaledVector(dir, -0.16), shotFrame.right, UP);
+  sfx.shot();
+  if (navigator.vibrate && touch) navigator.vibrate(12);
+
+  if (target) {
+    fx.impact(end, normal, "enemy", ENEMY[target.type].glow);
+    damageEnemy(target, hit.head ? HEAD_DMG : BODY_DMG, hit.head, end, dir);
+  } else if (kind !== "none") {
+    fx.impact(end, normal, kind);
+    if (span < 30) sfx.ricochet();
+  }
+
+  // Kick: the view jumps and settles back, the gun snaps up, the crosshair blooms.
+  player.recoilP += RECOIL_PITCH * (0.85 + Math.random() * 0.3);
+  player.recoilY += (Math.random() - 0.5) * 0.012;
+  player.kick = 1;
+  player.bloom = Math.min(SPREAD_MAX, player.bloom + SPREAD_PER_SHOT);
+  fovKick = 1.3;
+  shake = Math.min(0.05, shake + 0.022);
+  if (player.mag === 0 && player.reserve > 0) tryReload();
 }
 
 function tryReload() {
   if (player.weapon !== "pistol" || player.reloadT > 0 || player.mag >= MAG || player.reserve <= 0) return;
   player.reloadT = RELOAD_T;
-  player.reloadPending = true;
-  sfx.reload();
+  player.aimHold = 0;
+  sfx.reload(RELOAD_T);
 }
 
 function doMelee() {
-  if (player.meleeCd > 0 || player.dodgeT > 0) return;
+  if (player.meleeCd > 0 || player.dodgeT > 0 || player.reloadT > 0) return;
   player.meleeCd = MELEE_CD;
-  player.state = "melee";
+  player.meleeT = MELEE_T;
+  player.facing = camYaw;
   sfx.melee();
-  const forward = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+  const forward = tmpA.set(Math.sin(camYaw), 0, Math.cos(camYaw)).clone();
+  let landed = false;
   for (const e of enemies) {
     if (e.dead) continue;
     const d = e.pos.clone().sub(player.pos);
     d.y = 0;
-    if (d.length() < 1.85 && d.normalize().dot(forward) > 0.25) damageEnemy(e, 34);
+    const dist = d.length();
+    if (dist < 2 && d.normalize().dot(forward) > 0.2) {
+      const at = e.pos.clone().setY(1.25 * e.scale);
+      fx.impact(at, forward.clone().negate(), "enemy", ENEMY[e.type].glow);
+      damageEnemy(e, MELEE_DMG, false, at, forward);
+      landed = true;
+    }
+  }
+  if (landed) shake = Math.min(0.08, shake + 0.05);
+}
+
+function damageEnemy(e, amount, head, at, dir) {
+  if (e.dead) return;
+  e.hp -= amount;
+  e.hitT = 0.14;
+  e.stagger = head ? 0.4 : 0.22;
+  e.windup = 0;
+  e.attackT = Math.max(e.attackT, 0.35);
+  e.passive = false;
+  e.alert = 4;
+  // Shove them along the shot.
+  e.pos.x += dir.x * (head ? 0.16 : 0.1);
+  e.pos.z += dir.z * (head ? 0.16 : 0.1);
+  resolve(e.pos, 0.45, world.colliders);
+  const killed = e.hp <= 0;
+  floatText(at, String(amount), head ? "crit" : "");
+  hitMarker(killed ? "kill" : head ? "crit" : "");
+  if (killed) {
+    e.dead = true;
+    e.deadT = 0;
+    e.facing = Math.atan2(-dir.x, -dir.z);
+    mission.xp += ENEMY[e.type].xp + (head ? 5 : 0);
+    sfx.kill();
+    if (Math.random() < 0.55) pickups.push(makePickup(scene, e.pos.clone(), player.reserve < 24 || Math.random() < 0.5 ? "ammo" : "health"));
+  } else if (head) {
+    sfx.headshot();
+  } else {
+    sfx.hit();
   }
 }
 
-function damageEnemy(e, amount) {
-  e.hp -= amount;
-  e.hitT = 0.15;
-  sfx.hit();
-  if (e.hp <= 0 && !e.dead) {
-    e.dead = true;
-    mission.xp += 10;
-    if (Math.random() < 0.55) pickups.push(tag(makePickup(scene, e.pos.clone(), Math.random() < 0.5 ? "ammo" : "health")));
+function hurtPlayer(amount) {
+  player.hp = Math.max(0, player.hp - amount);
+  player.hurtT = 0.28;
+  sfx.hurt();
+  shake = Math.min(0.14, shake + 0.09);
+  if (navigator.vibrate && touch) navigator.vibrate(30);
+}
+
+// --- HUD feedback ----------------------------------------------------------
+
+function hitMarker(kind) {
+  const el = $("hitmarker");
+  el.className = kind;
+  // Restart the CSS animation.
+  void el.offsetWidth;
+  el.classList.add("show");
+  hitMarkT = 0.25;
+}
+
+function floatText(pos, text, cls) {
+  const el = document.createElement("div");
+  el.className = "floater " + cls;
+  el.textContent = text;
+  $("floaters").appendChild(el);
+  floaters.push({ el, pos: pos.clone(), life: 0.7, drift: (Math.random() - 0.5) * 30 });
+  if (floaters.length > 10) floaters.shift().el.remove();
+}
+
+function updateFloaters(dt) {
+  for (let i = floaters.length - 1; i >= 0; i--) {
+    const f = floaters[i];
+    f.life -= dt;
+    if (f.life <= 0) {
+      f.el.remove();
+      floaters.splice(i, 1);
+      continue;
+    }
+    const p = tmpA.copy(f.pos).project(camera);
+    if (p.z > 1) { f.el.style.opacity = 0; continue; }
+    const k = 1 - f.life / 0.7;
+    const x = (p.x * 0.5 + 0.5) * window.innerWidth + f.drift * k;
+    const y = (-p.y * 0.5 + 0.5) * window.innerHeight - 46 * k - 12;
+    f.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -50%) scale(${(1.25 - 0.35 * k).toFixed(2)})`;
+    f.el.style.opacity = String(Math.min(1, f.life * 3.2));
   }
 }
+
+// --- Mission ---------------------------------------------------------------
 
 function tryUse() {
   if (!interact) return;
@@ -606,7 +878,7 @@ function tryUse() {
     mission.phase = "activating";
     setBanner("TOWER LINKING");
     sfx.win();
-    setTimeout(() => end(true), 1200);
+    setTimeout(() => { if (mission.phase === "activating") end(true); }, 1200);
   }
 }
 
@@ -621,6 +893,8 @@ function updatePickups(dt) {
       const allowed = p.id === "c1" ? mission.phase === "cell1" : mission.patrolDone && !mission.got[p.id];
       if (allowed && d < 1.6) interact = { kind: "cell", item: p };
     } else if (d < 1.3) {
+      if (p.type === "health" && player.hp >= 100) continue;
+      if (p.type === "ammo" && player.reserve >= 90) continue;
       p.taken = true;
       scene.remove(p.mesh);
       if (p.type === "health") player.hp = Math.min(100, player.hp + 35);
@@ -643,65 +917,199 @@ function queueSpawns(types) {
   mission.queue.push(...types);
 }
 
+// --- Enemies ---------------------------------------------------------------
+
+function makeEnemy(type) {
+  const spec = ENEMY[type];
+  const rig = new Rig(chars.enemy, { height: 1.82 * spec.scale, weapon: "rifle", body: spec.body, glow: spec.glow, glowPower: 0.95 });
+  scene.add(rig.group);
+  return {
+    type,
+    rig,
+    scale: spec.scale,
+    hp: spec.hp,
+    maxHp: spec.hp,
+    speed: spec.speed,
+    dmg: spec.dmg,
+    range: spec.range,
+    hold: spec.hold,
+    cd: spec.cd,
+    attackT: 0.8 + Math.random() * 0.8,
+    windup: 0,
+    aimHold: 0,
+    kick: 0,
+    hitT: 0,
+    stagger: 0,
+    alert: 0,
+    dead: false,
+    deadT: 0,
+    passive: false,
+    facing: 0,
+    curSpeed: 0,
+    strafe: Math.random() < 0.5 ? -1 : 1,
+    strafeT: 1 + Math.random() * 2,
+    pos: new THREE.Vector3()
+  };
+}
+
+function removeEnemy(e) {
+  e.rig.dispose();
+}
+
+function spawnEnemy(type) {
+  const e = makeEnemy(type);
+  // Come in from somewhere the player is not standing.
+  const far = SPAWN_SPOTS.filter((s) => s.distanceTo(player.pos) > 13);
+  const pool = far.length ? far : SPAWN_SPOTS;
+  e.pos.copy(pool[Math.floor(Math.random() * pool.length)]);
+  e.pos.x += (Math.random() - 0.5) * 2.4;
+  e.pos.z += (Math.random() - 0.5) * 2.4;
+  resolve(e.pos, 0.5, world.colliders);
+  e.facing = Math.atan2(player.pos.x - e.pos.x, player.pos.z - e.pos.z);
+  enemies.push(e);
+  mission.waveLive = true;
+}
+
 function updateEnemies(dt) {
-  while (mission.queue.length && enemies.filter((e) => !e.dead).length < 5) {
-    const type = mission.queue.shift();
-    const e = createEnemy(type);
-    const spots = [new THREE.Vector3(-6, 0, 8), new THREE.Vector3(6, 0, -4), new THREE.Vector3(0, 0, -16), new THREE.Vector3(4, 0, 20)];
-    e.pos.copy(spots[Math.floor(Math.random() * spots.length)]);
-    e.pos.x += Math.random() * 2;
-    resolve(e.pos, 0.5, world.colliders);
-    e.group.position.copy(e.pos);
-    e.group.userData.ephemeral = true;
-    scene.add(e.group);
-    enemies.push(e);
-    mission.waveLive = true;
-  }
-  for (const e of enemies) {
-    e.attackT -= dt;
+  while (mission.queue.length && enemies.filter((e) => !e.dead).length < 5) spawnEnemy(mission.queue.shift());
+
+  const chest = new THREE.Vector3(player.pos.x, 1.3, player.pos.z);
+  const playerSpeed = player.vel.length();
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
     e.hitT = Math.max(0, e.hitT - dt);
+    e.kick *= Math.exp(-dt * 14);
+    e.rig.flash(e.hitT > 0 ? e.hitT / 0.14 : 0);
+
     if (e.dead) {
-      e.group.position.y = Math.max(-0.4, e.group.position.y - dt);
-      animateEnemy(e, clock.elapsedTime, false);
+      e.deadT += dt;
+      if (e.deadT > 4.2) e.pos.y -= dt * 0.5;
+      if (e.deadT > 6) {
+        removeEnemy(e);
+        enemies.splice(i, 1);
+        continue;
+      }
+      e.rig.update(dt, { pos: e.pos, facing: e.facing, speed: 0, pose: "dead", poseT: e.deadT / 0.5 });
       continue;
     }
-    const to = player.pos.clone().sub(e.pos);
+
+    e.attackT -= dt;
+    e.stagger = Math.max(0, e.stagger - dt);
+    e.aimHold = Math.max(0, e.aimHold - dt);
+    e.alert = Math.max(0, e.alert - dt);
+    const to = tmpA.copy(player.pos).sub(e.pos);
     to.y = 0;
     const dist = to.length();
-    const sees = dist < 18 && segmentClear(e.pos, player.pos, world.colliders, 0.15);
-    let moving = false;
-    if (sees && dist > e.melee) {
-      to.normalize();
-      let dir = to;
-      if (blocked(e.pos, dir, 1.2, 0.45, world.colliders)) {
-        const left = new THREE.Vector3(-dir.z, 0, dir.x);
-        const right = left.clone().multiplyScalar(-1);
-        dir = blocked(e.pos, left, 1.2, 0.45, world.colliders) ? right : left;
+    to.divideScalar(Math.max(dist, 0.001));
+    const los = !e.passive && player.hp > 0 && segmentClear(e.pos, player.pos, world.colliders, 0.15);
+    const sees = los && (dist < 20 || e.alert > 0);
+    if (sees) e.alert = 3;
+    const before = tmpB.copy(e.pos);
+    let faceWant = e.facing;
+
+    if (e.passive || e.stagger > 0) {
+      // Standing still: idle, or reeling from a hit.
+    } else if (sees) {
+      faceWant = Math.atan2(to.x, to.z);
+      const steady = e.windup > 0;
+      if (dist > e.hold && !steady) {
+        let dir = to.clone();
+        if (blocked(e.pos, dir, 1.2, 0.45, world.colliders)) {
+          const left = new THREE.Vector3(-dir.z, 0, dir.x);
+          dir = blocked(e.pos, left, 1.2, 0.45, world.colliders) ? left.multiplyScalar(-1) : left;
+        }
+        e.pos.addScaledVector(dir, e.speed * dt);
+      } else if (!steady && dist < e.range) {
+        // In position: sidestep between shots so they are not a static target.
+        e.strafeT -= dt;
+        if (e.strafeT <= 0) { e.strafe *= -1; e.strafeT = 1.2 + Math.random() * 2; }
+        const side = new THREE.Vector3(-to.z, 0, to.x).multiplyScalar(e.strafe);
+        if (blocked(e.pos, side, 1, 0.45, world.colliders)) e.strafe *= -1;
+        else e.pos.addScaledVector(side, e.speed * 0.4 * dt);
       }
-      e.pos.addScaledVector(dir, e.speed * dt);
-      resolve(e.pos, 0.45, world.colliders);
-      e.group.rotation.y = Math.atan2(dir.x, dir.z);
-      moving = true;
-    } else if (!sees) {
-      const wander = new THREE.Vector3(Math.sin(clock.elapsedTime + e.pos.x), 0, Math.cos(clock.elapsedTime * 0.7));
-      if (!blocked(e.pos, wander, 1, 0.45, world.colliders)) e.pos.addScaledVector(wander, e.speed * 0.35 * dt);
-      moving = true;
+    } else {
+      // Lost sight: head for where the player is, around whatever is in the way.
+      let dir = to.clone();
+      if (blocked(e.pos, dir, 1.4, 0.45, world.colliders)) {
+        const left = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(e.strafe);
+        dir = blocked(e.pos, left, 1.4, 0.45, world.colliders) ? left.multiplyScalar(-1) : left;
+      }
+      e.pos.addScaledVector(dir, e.speed * 0.75 * dt);
+      faceWant = Math.atan2(dir.x, dir.z);
     }
-    e.group.position.x = e.pos.x;
-    e.group.position.z = e.pos.z;
-    if (sees && dist < e.range && e.attackT <= 0 && player.iframes <= 0) {
-      const shotFrom = e.pos.clone().setY(1.3);
-      const shotTo = player.pos.clone().setY(1.2);
-      if (segmentClear(shotFrom, shotTo, world.colliders, 0.05)) {
-        player.hp = Math.max(0, player.hp - e.dmg);
-        player.hurtT = 0.25;
-        e.attackT = e.cd;
-        sfx.hurt();
-        shake = 0.1;
+
+    // Keep them off each other.
+    for (const o of enemies) {
+      if (o === e || o.dead) continue;
+      const dx = e.pos.x - o.pos.x;
+      const dz = e.pos.z - o.pos.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < 1.1 && d2 > 1e-5) {
+        const d = Math.sqrt(d2);
+        const push = (1.05 - d) * 0.5;
+        e.pos.x += (dx / d) * push;
+        e.pos.z += (dz / d) * push;
       }
     }
-    animateEnemy(e, clock.elapsedTime, moving);
+    resolve(e.pos, 0.45, world.colliders);
+    e.curSpeed += (before.distanceTo(e.pos) / Math.max(dt, 1e-4) - e.curSpeed) * ease(12, dt);
+    e.facing += wrapPi(faceWant - e.facing) * ease(9, dt);
+
+    // Attack: raise, steady for a beat, fire. Shots can miss, and moving,
+    // sprinting or dodging makes you harder to hit.
+    const inRange = sees && dist < e.range;
+    if (inRange) e.aimHold = 0.5;
+    if (inRange && e.attackT <= 0 && e.windup <= 0 && e.stagger <= 0) e.windup = WINDUP;
+    if (e.windup > 0) {
+      e.windup -= dt;
+      if (e.windup <= 0) {
+        e.attackT = e.cd * (0.85 + Math.random() * 0.3);
+        if (inRange) enemyFire(e, chest, dist, playerSpeed);
+      }
+    }
+
+    e.rig.update(dt, {
+      pos: e.pos,
+      facing: e.facing,
+      speed: e.curSpeed,
+      aim: e.aimHold > 0,
+      aimPoint: chest,
+      kick: e.kick
+    });
   }
+}
+
+function enemyFire(e, chest, dist, playerSpeed) {
+  const muzzle = e.rig.muzzle;
+  const from = muzzle.clone();
+  if (!segmentClear(from, chest, world.colliders, 0.05)) return;
+  let chance = 0.82 - dist * 0.022;
+  if (playerSpeed > 5) chance -= 0.3;
+  else if (playerSpeed > 1.5) chance -= 0.14;
+  chance = clamp(chance, 0.12, 0.9);
+  const hit = player.iframes <= 0 && Math.random() < chance;
+  const dir = chest.clone().sub(from).normalize();
+  let end;
+  if (hit) {
+    end = chest.clone();
+  } else {
+    // A miss goes past: offset sideways and up or down, then keep going.
+    const side = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar((Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 0.6));
+    const aim = chest.clone().add(side);
+    aim.y += (Math.random() - 0.4) * 0.7;
+    const d2 = aim.sub(from).normalize();
+    const wall = rayHit(from, d2, 60, world.colliders);
+    const ground = d2.y < -1e-3 ? -from.y / d2.y : Infinity;
+    const t = Math.min(wall ? wall.t : 60, ground);
+    end = from.clone().addScaledVector(d2, t);
+    if (t < 60) fx.impact(end, wall && wall.t <= ground ? wall.normal : UP, wall && wall.t <= ground ? "wall" : "ground");
+    sfx.whiz();
+  }
+  e.kick = 1;
+  fx.muzzle(from, dir, { scale: 1.25 });
+  fx.tracer(from, end, ENEMY[e.type].glow);
+  sfx.enemyShot(dist);
+  if (hit) hurtPlayer(e.dmg);
 }
 
 function updateMission() {
@@ -730,7 +1138,6 @@ function updateMission() {
       mission.objective = "ACTIVATE THE COMMUNICATIONS TOWER";
       setBanner("TOWER UNLOCKED");
     } else {
-      mission.phase = "wave";
       mission.wave = mission.wavesDone + 1;
       mission.objective = `SURVIVE WAVE ${mission.wave} / 3`;
       const packs = [
@@ -742,136 +1149,35 @@ function updateMission() {
       sfx.wave();
     }
   }
-  if (mission.phase === "cell1") mission.objective = "COLLECT THE FIRST POWER CELL";
 }
 
-function updateFx(dt) {
-  for (let i = flashes.length - 1; i >= 0; i--) {
-    flashes[i].life -= dt;
-    flashes[i].light.intensity = Math.max(0, flashes[i].life * 40);
-    if (flashes[i].burst) flashes[i].burst.scale.setScalar(Math.max(0.2, flashes[i].life * 12));
-    if (flashes[i].life <= 0) {
-      scene.remove(flashes[i].light);
-      if (flashes[i].burst) scene.remove(flashes[i].burst);
-      flashes.splice(i, 1);
-    }
-  }
-  if (tracer) {
-    tracer.userData.life -= dt;
-    if (tracer.userData.life <= 0) {
-      scene.remove(tracer);
-      tracer.geometry.dispose();
-      tracer = null;
-    }
-  }
-  const dummy = new THREE.Object3D();
-  impacts.items = impacts.items.filter((it) => (it.life -= dt) > 0);
-  impacts.mesh.count = impacts.items.length;
-  impacts.items.forEach((it, i) => {
-    dummy.position.copy(it.pos);
-    dummy.scale.setScalar(Math.max(0.2, it.life * 5));
-    dummy.updateMatrix();
-    impacts.mesh.setMatrixAt(i, dummy.matrix);
-  });
-  impacts.mesh.instanceMatrix.needsUpdate = true;
-}
+// --- HUD -------------------------------------------------------------------
 
-function rayAabbHit(origin, dir, box, maxDist) {
-  let tmin = 0;
-  let tmax = maxDist;
-  const mins = [box.minX, box.minY, box.minZ];
-  const maxs = [box.maxX, box.maxY, box.maxZ];
-  const o = [origin.x, origin.y, origin.z];
-  const d = [dir.x, dir.y, dir.z];
-  for (let i = 0; i < 3; i++) {
-    if (Math.abs(d[i]) < 1e-8) {
-      if (o[i] < mins[i] || o[i] > maxs[i]) return null;
-    } else {
-      let t1 = (mins[i] - o[i]) / d[i];
-      let t2 = (maxs[i] - o[i]) / d[i];
-      if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
-      if (t1 > tmin) tmin = t1;
-      if (t2 < tmax) tmax = t2;
-      if (tmin > tmax) return null;
-    }
-  }
-  return tmin >= 0 ? tmin : null;
-}
-
-function spawnMark(pos) {
-  const mark = new THREE.Mesh(
-    new THREE.SphereGeometry(0.09, 8, 6),
-    new THREE.MeshBasicMaterial({ color: 0xfff3b0 })
-  );
-  mark.position.copy(pos);
-  scene.add(mark);
-}
-  function spawnFlash(pos) {
-  const light = new THREE.PointLight(0xfff1c4, 18, 8, 2);
-  light.position.copy(pos);
-  const burst = new THREE.Mesh(
-    new THREE.SphereGeometry(0.16, 8, 6),
-    new THREE.MeshBasicMaterial({ color: 0xfff6d0 })
-  );
-  burst.position.copy(pos);
-  scene.add(light, burst);
-  flashes.push({ light, burst, life: 0.22 });
-}
-
-function spawnTracer(from, to) {
-  if (tracer) {
-    scene.remove(tracer);
-    tracer.geometry.dispose();
-  }
-  const dir = to.clone().sub(from);
-  const len = Math.max(0.2, dir.length());
-  const mesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.035, 0.035, len, 6),
-    new THREE.MeshBasicMaterial({ color: 0xfff1b0 })
-  );
-  mesh.position.copy(from).addScaledVector(dir.normalize(), len * 0.5);
-  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-  tracer = mesh;
-  tracer.userData.life = 0.28;
-  scene.add(tracer);
-}
-
-function makeImpacts() {
-  const geo = new THREE.SphereGeometry(0.16, 8, 6);
-  const mat = new THREE.MeshBasicMaterial({ color: 0xfff0b8 });
-  const mesh = new THREE.InstancedMesh(geo, mat, 24);
-  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  mesh.count = 0;
-  scene.add(mesh);
-  return { mesh, items: [] };
-}
-
-function spawnImpact(pos) {
-  impacts.items.push({ pos: pos.clone(), life: 0.35 });
-  if (impacts.items.length > 24) impacts.items.shift();
-  const dummy = new THREE.Object3D();
-  impacts.mesh.count = impacts.items.length;
-  impacts.items.forEach((it, i) => {
-    dummy.position.copy(it.pos);
-    dummy.scale.setScalar(it.life * 4);
-    dummy.updateMatrix();
-    impacts.mesh.setMatrixAt(i, dummy.matrix);
-  });
-  impacts.mesh.instanceMatrix.needsUpdate = true;
-}
-
-function syncHud() {
+function syncHud(dt = 0, speed = 0) {
   $("hp-fill").style.width = player.hp + "%";
   $("hp-text").textContent = Math.ceil(player.hp) + " HP";
   $("weapon-name").textContent = player.weapon === "knife" ? "KNIFE" : "PISTOL";
-  $("ammo-text").textContent = player.weapon === "knife" ? "READY" : `${player.mag} / ${player.reserve}`;
+  const ammo = $("ammo-text");
+  ammo.textContent = player.weapon === "knife" ? "READY" : player.reloadT > 0 ? "RELOADING" : `${player.mag} / ${player.reserve}`;
+  ammo.classList.toggle("low", player.weapon === "pistol" && player.mag <= 3 && player.reloadT <= 0);
   $("objective").textContent = mission.objective;
   $("wave-pill").textContent = mission.wave ? `WAVE ${mission.wave} / 3` : "WAVE — / 3";
   $("cell-pill").textContent = `CELLS ${mission.cells} / 3`;
   $("xp-pill").textContent = `XP ${mission.xp}`;
-  const hits = $("hit-pill");
-  if (hits) hits.textContent = `HITS ${hitCount}`;
   $("btn-use").classList.toggle("ready", !!interact);
+
+  // Crosshair: opens with spread, turns red on a target.
+  const ret = $("reticle");
+  const spread = SPREAD_BASE + clamp(speed / RUN_SPEED, 0, 1) * SPREAD_MOVE + player.bloom;
+  const pxPerRad = window.innerHeight / (camera.fov * Math.PI / 180);
+  ret.style.setProperty("--gap", (5 + spread * pxPerRad).toFixed(1) + "px");
+  ret.classList.toggle("on-target", !!aimInfo.enemy);
+  ret.classList.toggle("off", player.weapon === "knife" || player.reloadT > 0);
+  if (hitMarkT > 0) {
+    hitMarkT -= dt;
+    if (hitMarkT <= 0) $("hitmarker").classList.remove("show");
+  }
+
   const target = currentTarget();
   const marker = $("marker");
   if (!target) {
@@ -883,11 +1189,9 @@ function syncHud() {
   const y = (-projected.y * 0.5 + 0.5) * window.innerHeight;
   const behind = projected.z > 1;
   const m = 28;
-  const cx = Math.max(m, Math.min(window.innerWidth - m, behind ? window.innerWidth - x : x));
-  const cy = Math.max(m, Math.min(window.innerHeight - m, behind ? window.innerHeight - y : y));
   marker.hidden = false;
-  marker.style.left = cx + "px";
-  marker.style.top = cy + "px";
+  marker.style.left = clamp(behind ? window.innerWidth - x : x, m, window.innerWidth - m) + "px";
+  marker.style.top = clamp(behind ? window.innerHeight - y : y, m, window.innerHeight - m) + "px";
 }
 
 function currentTarget() {
@@ -941,6 +1245,7 @@ function snapshot() {
     phase: mission?.phase,
     wave: mission?.wave,
     wavesDone: mission?.wavesDone,
+    xp: mission?.xp,
     enemies: enemies?.filter((e) => !e.dead).length,
     pos: player ? { x: player.pos.x, z: player.pos.z } : null
   };
