@@ -47,6 +47,33 @@ const ENEMY = {
   hunter: { role: "flank", tint: 0x6d777d, glow: 0x39e0ff, scale: 0.95, bulk: 0.93, gun: "smg", hp: 30, speed: 4.5, dmg: 5, range: 10, hold: 5, mag: 9, burst: 3, burstGap: 0.09, cd: 1, xp: 10 },
   enforcer: { role: "push", tint: 0x5b544d, glow: 0xff8a1e, scale: 1.16, bulk: 1.16, gun: "heavy", hp: 110, speed: 1.9, dmg: 6, range: 12, hold: 3.5, mag: 12, burst: 4, burstGap: 0.11, cd: 1.35, xp: 20 }
 };
+// Boxing. The punch button throws the jab; press again inside the window for
+// the cross. A clean 1-2 drops a Patrol. Times are seconds, distances metres.
+const PUNCH = {
+  jab: { t: 0.26, hit: 0.34, dmg: 16, stagger: 0.3, push: 0.12, shake: 0.03 },
+  cross: { t: 0.38, hit: 0.36, dmg: 32, stagger: 0.55, push: 0.45, shake: 0.08 },
+  window: 0.55,     // after a jab lands or misses, how long the cross stays loaded
+  reach: 1.25,      // fist range from Ghost's centre
+  lunge: 1.6,       // extra distance he will step in to close on a target
+  cone: 0.45,       // cos of the half-angle in front that counts as a target
+  stand: 0.95,      // he stops stepping in at this distance
+  guard: 0.7        // hands stay up this long after the last punch
+};
+
+// Aim lock. While FIRE is held, the crosshair snaps to the nearest target near
+// it and stays on him as he moves. Drag hard to break off or switch target.
+// Angles are radians.
+const AIM_LOCK = {
+  acquire: 0.24,    // how close to the crosshair a target must be to lock
+  keep: 0.42,       // how far he can drift before the lock drops
+  range: 34,
+  track: 11,        // how fast the view follows a moving target
+  breakDrag: 1.3,   // drag faster than this (radians a second) to break the lock
+  breakTime: 0.35,
+  chest: 1.2,       // lock sits between chest and head, times enemy scale
+  head: 1.62
+};
+
 // Ambushes: Blackout Crew stragglers that pop up at random, from behind cover
 // or from wherever Ghost is not looking. Times are seconds, distances metres.
 const AMBUSH = {
@@ -60,6 +87,8 @@ const AMBUSH = {
   far: 24,
   rise: 0.45        // time to stand up from behind cover
 };
+const CAM_PAD = 0.3;            // lens stays this far off any wall
+const CAM_EDGE = 0.25;          // how far past the kerb line the lens may sit
 const WINDUP = 0.42;           // enemy raises and steadies before each burst
 const ENEMY_RELOAD = 1.8;      // the window to push them
 
@@ -74,6 +103,10 @@ let mode = "load";
 let pauseReason = null;
 let quality = settings.quality;
 let fpsOn = settings.fps;
+let aimLockOn = settings.aimLock !== false;
+let lockTarget = null;
+let lockBreakT = 0;
+let camBoom = 3.3;
 let fpsAcc = 0;
 let fpsFrames = 0;
 let bannerT = 0;
@@ -119,7 +152,7 @@ const ease = (rate, dt) => 1 - Math.exp(-rate * dt);
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
 function loadSettings() {
-  const base = { sensitivity: 1, quality: "medium", volume: 0.7, fps: false };
+  const base = { sensitivity: 1, quality: "medium", volume: 0.7, fps: false, aimLock: true };
   try {
     return Object.assign(base, JSON.parse(localStorage.getItem("s9-settings") || "{}"));
   } catch {
@@ -129,7 +162,7 @@ function loadSettings() {
 
 function saveSettings() {
   try {
-    localStorage.setItem("s9-settings", JSON.stringify({ sensitivity: input.sensitivity, quality, volume: sfx.volume, fps: fpsOn }));
+    localStorage.setItem("s9-settings", JSON.stringify({ sensitivity: input.sensitivity, quality, volume: sfx.volume, fps: fpsOn, aimLock: aimLockOn }));
   } catch { /* private mode */ }
 }
 
@@ -195,6 +228,10 @@ function installDebug() {
     cover: () => coverPoints.map((c) => [+c.pos.x.toFixed(2), +c.pos.z.toFixed(2)]),
     wake: () => enemies.forEach((e) => { e.passive = false; }),
     ambush: (n = 1) => spawnAmbush(n),
+    punch: () => tryPunch(),
+    lock: () => (lockTarget ? enemies.indexOf(lockTarget) : -1),
+    setAimLock: (on) => { aimLockOn = on; },
+    playerState: () => ({ state: player.state, punch: player.punch && player.punch.kind, comboT: +player.comboT.toFixed(2), facing: +player.facing.toFixed(2), yaw: +camYaw.toFixed(3), pitch: +camPitch.toFixed(3), boom: +camBoom.toFixed(2), cam: camera.position.toArray().map((v) => +v.toFixed(2)) }),
     ambushIn: (t) => { mission.ambushT = t; },
     killAll: () => enemies.forEach((e) => { if (!e.dead) damageEnemy(e, 999, false, e.pos.clone().setY(1.2), new THREE.Vector3(0, 0, 1)); }),
     hurt: (n) => hurtPlayer(n),
@@ -244,6 +281,10 @@ function resetMission() {
     reloadT: 0,
     meleeT: 0,
     meleeCd: 0,
+    punch: null,        // { kind, t, hit, target }
+    punchQueued: false,
+    comboT: 0,          // > 0 means the cross is loaded
+    guardT: 0,
     dodgeCd: 0,
     dodgeT: 0,
     dodgeDir: new THREE.Vector3(),
@@ -253,6 +294,8 @@ function resetMission() {
   };
   camYaw = player.facing;
   camPitch = -0.06;
+  lockTarget = null;
+  lockBreakT = 0;
   aimAmt = 0;
   fovKick = 0;
   shake = 0;
@@ -285,8 +328,25 @@ function resetMission() {
 }
 
 function bindUi() {
+  // Stop the browser's own gestures (edge swipe, pull, pinch, double-tap zoom,
+  // long-press menu) from sliding or zooming the page in the middle of a fight.
+  const guard = (e) => { if (mode === "play" && !(e.target.closest && e.target.closest(".screen"))) e.preventDefault(); };
+  for (const type of ["touchstart", "touchmove", "touchend"]) document.addEventListener(type, guard, { passive: false });
+  for (const type of ["gesturestart", "gesturechange", "gestureend", "dblclick", "contextmenu"]) {
+    document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+  }
+  window.addEventListener("scroll", () => { if (window.scrollX || window.scrollY) window.scrollTo(0, 0); });
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
+
   $("btn-start").onclick = () => {
     sfx.unlock();
+    // Phones that allow it: go full screen and hold landscape, so there is no
+    // browser bar or edge gesture left to fight with.
+    if (touch && !document.fullscreenElement && document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen({ navigationUI: "hide" })
+        .then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock("landscape"))
+        .catch(() => { /* not allowed here; the page still plays */ });
+    }
     $("screen-start").hidden = true;
     $("hud").hidden = false;
     if (isPortrait()) {
@@ -315,6 +375,8 @@ function bindUi() {
   $("volume").oninput = () => { sfx.volume = Number($("volume").value); saveSettings(); };
   $("show-fps").checked = fpsOn;
   $("show-fps").onchange = () => { fpsOn = $("show-fps").checked; $("fps").hidden = !fpsOn; saveSettings(); };
+  $("aim-lock").checked = aimLockOn;
+  $("aim-lock").onchange = () => { aimLockOn = $("aim-lock").checked; saveSettings(); };
   $("view").addEventListener("click", () => {
     if (mode === "play" && !touch && document.pointerLockElement !== $("view")) {
       $("view").requestPointerLock?.();
@@ -425,6 +487,7 @@ function update(dt) {
   const friction = touch && aimInfo.enemy ? 0.55 : 1;
   camYaw -= look.dx * friction;
   camPitch = clamp(camPitch - look.dy * friction, PITCH_MIN, PITCH_MAX);
+  updateAimLock(dt, look);
 
   if (player.hp <= 0) {
     player.deadT += dt;
@@ -448,6 +511,8 @@ function update(dt) {
   player.iframes = Math.max(0, player.iframes - dt);
   player.hurtT = Math.max(0, player.hurtT - dt);
   player.aimHold = Math.max(0, player.aimHold - dt);
+  player.comboT = Math.max(0, player.comboT - dt);
+  player.guardT = Math.max(0, player.guardT - dt);
   player.bloom = Math.max(0, player.bloom - dt * (0.02 + player.bloom * 4.5));
   player.recoilP *= Math.exp(-dt * 8);
   player.recoilY *= Math.exp(-dt * 8);
@@ -463,7 +528,7 @@ function update(dt) {
   }
 
   const firing = input.firing();
-  const pistolUp = player.weapon === "pistol" && player.reloadT <= 0 && player.dodgeT <= 0;
+  const pistolUp = player.weapon === "pistol" && player.reloadT <= 0 && player.dodgeT <= 0 && !player.punch;
   if (firing && pistolUp) player.aimHold = AIM_HOLD;
   const aiming = pistolUp && player.aimHold > 0;
 
@@ -481,6 +546,9 @@ function update(dt) {
     player.dodgeCd = DODGE_CD;
     player.iframes = DODGE_T + 0.06;
     player.aimHold = 0;
+    player.punch = null;
+    player.punchQueued = false;
+    player.guardT = 0;
     if (stick > 0.2) player.dodgeDir.copy(move);
     else player.dodgeDir.set(Math.sin(player.facing), 0, Math.cos(player.facing));
     sfx.dodge();
@@ -515,8 +583,13 @@ function update(dt) {
     player.aimHold = 0;
     setBanner(player.weapon === "knife" ? "KNIFE READY" : "PISTOL READY");
   }
-  if (input.take("melee") || (player.weapon === "knife" && firing)) doMelee();
-  if (player.weapon === "pistol" && firing) tryFire(!wasFiring);
+  if (player.weapon === "knife") {
+    if (input.take("melee") || firing) doMelee();
+  } else if (input.take("melee")) {
+    tryPunch();
+  }
+  updatePunch(dt);
+  if (player.weapon === "pistol" && firing && !player.punch) tryFire(!wasFiring);
   wasFiring = firing;
   if (input.take("use")) tryUse();
 
@@ -527,6 +600,16 @@ function update(dt) {
   player.backward = false;
   if (player.dodgeT > 0) {
     player.facing = Math.atan2(player.dodgeDir.x, player.dodgeDir.z);
+  } else if (player.punch || player.guardT > 0) {
+    // Fists up: stay square to whoever is being hit, or to the camera.
+    const t = player.punch && player.punch.target && !player.punch.target.dead ? player.punch.target : null;
+    const want = t ? Math.atan2(t.pos.x - player.pos.x, t.pos.z - player.pos.z) : player.punch ? player.facing : camYaw;
+    player.facing += wrapPi(want - player.facing) * ease(22, dt);
+    if (moving) {
+      let off = wrapPi(Math.atan2(player.vel.x, player.vel.z) - player.facing);
+      if (Math.abs(off) > 1.75) { player.backward = true; off = wrapPi(off - Math.PI); }
+      lowerWant = clamp(off, -1.05, 1.05);
+    }
   } else if (squared) {
     player.facing += wrapPi(camYaw - player.facing) * (player.snapAim ? 1 : ease(24, dt));
     if (moving) {
@@ -542,7 +625,7 @@ function update(dt) {
   }
   player.lower += (lowerWant - player.lower) * ease(14, dt);
 
-  player.state = player.dodgeT > 0 ? "dodge" : player.reloadT > 0 ? "reload" : player.meleeT > 0 ? "melee" : aiming ? "aim" : moving ? (sprint ? "sprint" : "move") : "idle";
+  player.state = player.dodgeT > 0 ? "dodge" : player.punch ? "punch" : player.reloadT > 0 ? "reload" : player.meleeT > 0 ? "melee" : aiming ? "aim" : moving ? (sprint ? "sprint" : "move") : "idle";
   poseGhost(dt, speed, aiming);
   player.snapAim = false;
   if (ghost.stepped && player.dodgeT <= 0) sfx.step();
@@ -570,7 +653,8 @@ function poseGhost(dt, speed = 0, aiming = false) {
   let poseT = 0;
   if (player.hp <= 0) { pose = "dead"; poseT = player.deadT / 0.55; }
   else if (player.dodgeT > 0) { pose = "dodge"; poseT = 1 - player.dodgeT / DODGE_T; }
-  else if (player.reloadT > 0) { pose = "reload"; poseT = 1 - player.reloadT / RELOAD_T; }
+  else if (player.punch) { pose = player.punch.kind; poseT = player.punch.t / PUNCH[player.punch.kind].t; }
+  else if (player.reloadT > 0 && player.guardT <= 0) { pose = "reload"; poseT = 1 - player.reloadT / RELOAD_T; }
   else if (player.meleeT > 0) { pose = "melee"; poseT = 1 - player.meleeT / MELEE_T; }
   ghost.update(dt, {
     pos: player.pos,
@@ -584,7 +668,9 @@ function poseGhost(dt, speed = 0, aiming = false) {
     pose,
     poseT,
     knife: player.weapon === "knife" || player.meleeT > 0,
-    snapAim: player.snapAim
+    snapAim: player.snapAim,
+    guard: player.guardT > 0,
+    punchAt: player.punch ? punchPoint(player.punch.target) : null
   });
 }
 
@@ -607,18 +693,38 @@ function updateCamera(dt, aiming = false, sprinting = false) {
   camPivot.y += (tmpB.y - camPivot.y) * ease(14, dt);
 
   const dist = lerp(3.3, 2.45, aimAmt);
-  const side = lerp(0.72, 0.6, aimAmt);
-  const desired = new THREE.Vector3().copy(camPivot)
-    .addScaledVector(right, side)
-    .addScaledVector(lookDir, -dist);
-  desired.y += 0.2;
-  const arm = desired.clone().sub(camPivot);
-  const len = arm.length();
-  arm.divideScalar(len);
-  const hit = rayHit(camPivot, arm, len + 0.25, world.colliders);
-  const used = hit ? Math.max(0.6, hit.t - 0.25) : len;
-  camera.position.copy(camPivot).addScaledVector(arm, used);
-  if (camera.position.y < 0.3) camera.position.y = 0.3;
+  // Keep the lens inside the street. A wall beside Ghost slides the camera in
+  // behind him; a wall behind him pulls it closer. It never goes through one.
+  const b = world.layout.bounds;
+  let side = lerp(0.72, 0.6, aimAmt);
+  const sideHit = rayHit(camPivot, right, side + CAM_PAD, world.colliders);
+  if (sideHit) side = Math.min(side, sideHit.t - CAM_PAD);
+  const edge = right.x > 0 ? (b.maxX + CAM_EDGE - camPivot.x) / right.x : right.x < 0 ? (b.minX - CAM_EDGE - camPivot.x) / right.x : Infinity;
+  side = Math.max(0, Math.min(side, edge - 0.1));
+  const shoulder = new THREE.Vector3().copy(camPivot).addScaledVector(right, side);
+  shoulder.y += 0.2;
+  const back = lookDir.clone().negate();
+  let boom = dist;
+  // Five rays: the centre of the lens and its four corners.
+  const camUp = new THREE.Vector3().crossVectors(right, lookDir).normalize();
+  for (const [ox, oy] of [[0, 0], [0.28, 0.16], [-0.28, 0.16], [0.28, -0.16], [-0.28, -0.16]]) {
+    const from = tmpB.copy(shoulder).addScaledVector(right, ox * Math.min(1, side / 0.3 + 0.2)).addScaledVector(camUp, oy);
+    const hit = rayHit(from, back, dist + CAM_PAD, world.colliders);
+    if (hit) boom = Math.min(boom, hit.t - CAM_PAD);
+  }
+  // Street ends and the building line, where there is no collider to hit.
+  for (const [o, d, lo, hi] of [[shoulder.x, back.x, b.minX - CAM_EDGE, b.maxX + CAM_EDGE], [shoulder.z, back.z, b.minZ - 0.4, b.maxZ + 0.2]]) {
+    if (d > 1e-5) boom = Math.min(boom, (hi - o) / d);
+    else if (d < -1e-5) boom = Math.min(boom, (lo - o) / d);
+  }
+  // Floor: stop the boom before it dips under the street.
+  if (back.y < -1e-5) boom = Math.min(boom, (0.3 - shoulder.y) / back.y);
+  boom = Math.max(0.12, boom);
+  // In at once, back out gently.
+  camBoom = boom < camBoom ? boom : camBoom + (boom - camBoom) * ease(7, dt);
+  camera.position.copy(shoulder).addScaledVector(back, camBoom);
+  // Too close to see past him: drop Ghost out of the picture rather than fill it with coat.
+  if (ghost) ghost.model.visible = camBoom > 0.85;
   if (shake > 0) {
     camera.position.x += (Math.random() - 0.5) * shake;
     camera.position.y += (Math.random() - 0.5) * shake;
@@ -790,6 +896,186 @@ function tryReload() {
   player.reloadT = RELOAD_T;
   player.aimHold = 0;
   sfx.reload(RELOAD_T);
+}
+
+// --- Boxing ----------------------------------------------------------------
+
+// Where the fist is going: the target's chin, or straight ahead.
+function punchPoint(e) {
+  if (!e || e.dead) return null;
+  const p = new THREE.Vector3(e.pos.x, 1.5 * e.scale, e.pos.z);
+  // Stop at the near side of his head, not its centre.
+  const back = tmpA.set(player.pos.x - e.pos.x, 0, player.pos.z - e.pos.z);
+  if (back.lengthSq() > 1e-4) p.addScaledVector(back.normalize(), 0.16 * e.scale);
+  return p;
+}
+
+// Nearest live enemy in front of Ghost that a punch could reach.
+function punchTarget(maxDist) {
+  const fx_ = Math.sin(camYaw);
+  const fz_ = Math.cos(camYaw);
+  let best = null;
+  let bestD = maxDist;
+  for (const e of enemies) {
+    if (e.dead || e.riseT > 0) continue;
+    const dx = e.pos.x - player.pos.x;
+    const dz = e.pos.z - player.pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d > bestD) continue;
+    if (d > 0.7 && (dx * fx_ + dz * fz_) / d < PUNCH.cone) continue;
+    best = e;
+    bestD = d;
+  }
+  return best;
+}
+
+function tryPunch() {
+  if (player.dodgeT > 0 || player.hp <= 0) return;
+  if (player.punch) {
+    // Buffer the next one so a quick double tap is always a 1-2.
+    if (player.punch.kind === "jab") player.punchQueued = true;
+    return;
+  }
+  startPunch(player.comboT > 0 ? "cross" : "jab");
+}
+
+function startPunch(kind) {
+  const target = punchTarget(PUNCH.reach + PUNCH.lunge);
+  player.punch = { kind, t: 0, hit: false, target };
+  player.punchQueued = false;
+  player.comboT = 0;
+  player.aimHold = 0;
+  player.guardT = PUNCH.guard + PUNCH[kind].t;
+  if (player.reloadT > 0) { player.reloadT = 0; }       // a punch drops the reload
+  if (!target) player.facing = camYaw;
+  sfx.melee();
+}
+
+function updatePunch(dt) {
+  const p = player.punch;
+  if (!p) return;
+  const spec = PUNCH[p.kind];
+  p.t += dt;
+  const target = p.target && !p.target.dead ? p.target : null;
+  // Step in behind the punch until he is at arm's length.
+  if (!p.hit) {
+    const dir = target
+      ? tmpA.set(target.pos.x - player.pos.x, 0, target.pos.z - player.pos.z)
+      : tmpA.set(Math.sin(player.facing), 0, Math.cos(player.facing));
+    const d = dir.length();
+    dir.normalize();
+    const room = target ? d - PUNCH.stand : 0.3;
+    if (room > 0) {
+      const stepSpeed = (target ? PUNCH.lunge + 0.4 : 0.3) / (spec.t * spec.hit);
+      player.pos.addScaledVector(dir, Math.min(room, stepSpeed * dt));
+      resolve(player.pos, 0.42, world.colliders);
+    }
+  }
+  if (!p.hit && p.t >= spec.t * spec.hit) {
+    p.hit = true;
+    const e = target && Math.hypot(target.pos.x - player.pos.x, target.pos.z - player.pos.z) <= PUNCH.reach + 0.15 ? target : punchTarget(PUNCH.reach);
+    if (e) {
+      const dir = new THREE.Vector3(e.pos.x - player.pos.x, 0, e.pos.z - player.pos.z).normalize();
+      const at = punchPoint(e) || e.pos.clone().setY(1.5 * e.scale);
+      fx.impact(at, dir.clone().negate(), "enemy", ENEMY[e.type].glow);
+      damageEnemy(e, spec.dmg, false, at, dir);
+      if (!e.dead) {
+        e.stagger = Math.max(e.stagger, spec.stagger);
+        e.attackT = Math.max(e.attackT, spec.stagger + 0.25);
+        e.pos.addScaledVector(dir, spec.push);
+        resolve(e.pos, 0.45, world.colliders);
+      }
+      shake = Math.min(0.12, shake + spec.shake);
+      if (p.kind === "cross") fovKick = 1.6;
+      if (navigator.vibrate && touch) navigator.vibrate(p.kind === "cross" ? 28 : 12);
+    }
+  }
+  if (p.t >= spec.t) {
+    player.punch = null;
+    player.guardT = PUNCH.guard;
+    if (p.kind === "jab") {
+      player.comboT = PUNCH.window;
+      if (player.punchQueued) startPunch("cross");
+    }
+    player.punchQueued = false;
+  }
+}
+
+// --- Aim lock --------------------------------------------------------------
+
+const lockDir = new THREE.Vector3();
+const lockEye = new THREE.Vector3();
+
+// Where the camera will sit for a given yaw and pitch, ignoring walls.
+function camEyeFor(yaw, pitch, out) {
+  const cp = Math.cos(pitch);
+  const dist = lerp(3.3, 2.45, aimAmt);
+  const side = lerp(0.72, 0.6, aimAmt);
+  out.set(
+    player.pos.x - Math.cos(yaw) * side - Math.sin(yaw) * cp * Math.min(dist, camBoom),
+    camPivot.y + 0.2 - Math.sin(pitch) * Math.min(dist, camBoom),
+    player.pos.z + Math.sin(yaw) * side - Math.cos(yaw) * cp * Math.min(dist, camBoom)
+  );
+  return out;
+}
+
+function lockVisible(e, eye) {
+  for (const h of [AIM_LOCK.head, AIM_LOCK.chest]) {
+    lockDir.set(e.pos.x - eye.x, h * e.scale - eye.y, e.pos.z - eye.z);
+    const d = lockDir.length();
+    lockDir.divideScalar(d);
+    if (!rayHit(eye, lockDir, d - 0.3, world.colliders)) return true;
+  }
+  return false;
+}
+
+// Angle between the view and an enemy's chest, from where the camera sits.
+function lockAngle(e, eye) {
+  lockDir.set(e.pos.x - eye.x, AIM_LOCK.chest * e.scale - eye.y, e.pos.z - eye.z).normalize();
+  return Math.acos(clamp(lockDir.dot(lookDir), -1, 1));
+}
+
+function updateAimLock(dt, look) {
+  lockBreakT = Math.max(0, lockBreakT - dt);
+  const firing = input.firing();
+  const active = aimLockOn && player.hp > 0 && player.weapon === "pistol" && !player.punch && player.reloadT <= 0 &&
+    player.dodgeT <= 0 && (firing || player.aimHold > 0);
+  if (!active) { lockTarget = null; return; }
+  if (Math.hypot(look.dx, look.dy) > AIM_LOCK.breakDrag * Math.max(dt, 1 / 120)) { lockTarget = null; lockBreakT = AIM_LOCK.breakTime; }
+  if (lockBreakT > 0) return;
+
+  const eye = camera.position;
+  lookDir.set(Math.sin(camYaw) * Math.cos(camPitch), Math.sin(camPitch), Math.cos(camYaw) * Math.cos(camPitch));
+  const ok = (e, cone) => e && !e.dead && e.riseT <= 0 && e.pos.distanceTo(player.pos) <= AIM_LOCK.range &&
+    lockAngle(e, eye) <= cone && lockVisible(e, eye);
+  let fresh = false;
+  if (!ok(lockTarget, AIM_LOCK.keep)) {
+    lockTarget = null;
+    let best = Infinity;
+    for (const e of enemies) {
+      if (!ok(e, AIM_LOCK.acquire)) continue;
+      const score = lockAngle(e, eye) + e.pos.distanceTo(player.pos) * 0.003;
+      if (score < best) { best = score; lockTarget = e; }
+    }
+    fresh = !!lockTarget;
+  }
+  if (!lockTarget) return;
+
+  // Yaw goes to the target. Pitch is left alone while the crosshair is
+  // anywhere between chest and head, so headshots are still yours to take.
+  const e = lockTarget;
+  const snap = fresh || (firing && !wasFiring);
+  const k = snap ? 1 : ease(AIM_LOCK.track, dt);
+  for (let i = 0; i < (snap ? 4 : 1); i++) {
+    const from = snap ? camEyeFor(camYaw, camPitch, lockEye) : eye;
+    const dx = e.pos.x - from.x;
+    const dz = e.pos.z - from.z;
+    const flat = Math.max(0.5, Math.hypot(dx, dz));
+    const yAim = from.y + Math.tan(camPitch) * flat;
+    const yWant = clamp(yAim, AIM_LOCK.chest * e.scale, AIM_LOCK.head * e.scale);
+    camYaw += wrapPi(Math.atan2(dx, dz) - camYaw) * k;
+    camPitch = clamp(camPitch + (Math.atan2(yWant - from.y, flat) - camPitch) * k, PITCH_MIN, PITCH_MAX);
+  }
 }
 
 function doMelee() {
@@ -1442,6 +1728,17 @@ function syncHud(dt = 0, speed = 0) {
   const pxPerRad = window.innerHeight / (camera.fov * Math.PI / 180);
   ret.style.setProperty("--gap", (5 + spread * pxPerRad).toFixed(1) + "px");
   ret.classList.toggle("on-target", !!aimInfo.enemy);
+  const lock = $("lock");
+  if (lockTarget && !lockTarget.dead) {
+    const lp = tmpA.set(lockTarget.pos.x, 1.3 * lockTarget.scale, lockTarget.pos.z).project(camera);
+    lock.hidden = lp.z > 1;
+    lock.style.transform = `translate(${((lp.x * 0.5 + 0.5) * window.innerWidth).toFixed(1)}px, ${((-lp.y * 0.5 + 0.5) * window.innerHeight).toFixed(1)}px)`;
+  } else {
+    lock.hidden = true;
+  }
+  const meleeLabel = player.weapon === "knife" ? "SLASH" : player.comboT > 0 || (player.punch && player.punch.kind === "jab") ? "CROSS" : "PUNCH";
+  if ($("btn-melee").textContent !== meleeLabel) $("btn-melee").textContent = meleeLabel;
+  $("btn-melee").classList.toggle("ready", player.comboT > 0);
   ret.classList.toggle("off", player.weapon === "knife" || player.reloadT > 0);
   if (hitMarkT > 0) {
     hitMarkT -= dt;
@@ -1499,6 +1796,8 @@ function resize() {
   if (!renderer) return;
   const w = window.innerWidth;
   const h = window.innerHeight;
+  // Browser bars sliding in and out can leave the page scrolled. Pin it.
+  if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
   camera.aspect = w / Math.max(1, h);
   camera.updateProjectionMatrix();
   applyQuality();

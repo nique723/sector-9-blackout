@@ -23,6 +23,12 @@ html, body {
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+  /* Nothing on this page scrolls, bounces or pops a long-press menu. */
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  overscroll-behavior: none;
+  -webkit-touch-callout: none;
 }
 
 #app { position: fixed; inset: 0; }
@@ -159,6 +165,39 @@ html, body {
 #reticle .b { width: 2px; height: 8px; left: -1px; top: var(--gap); }
 #reticle .l { width: 8px; height: 2px; top: -1px; right: var(--gap); }
 #reticle .r { width: 8px; height: 2px; top: -1px; left: var(--gap); }
+
+/* Aim lock: four corners that sit on the locked target. */
+#lock {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+#lock i {
+  position: absolute;
+  left: -19px;
+  top: -19px;
+  width: 38px;
+  height: 38px;
+  background:
+    linear-gradient(#ff5a64, #ff5a64) left top / 10px 2px,
+    linear-gradient(#ff5a64, #ff5a64) left top / 2px 10px,
+    linear-gradient(#ff5a64, #ff5a64) right top / 10px 2px,
+    linear-gradient(#ff5a64, #ff5a64) right top / 2px 10px,
+    linear-gradient(#ff5a64, #ff5a64) left bottom / 10px 2px,
+    linear-gradient(#ff5a64, #ff5a64) left bottom / 2px 10px,
+    linear-gradient(#ff5a64, #ff5a64) right bottom / 10px 2px,
+    linear-gradient(#ff5a64, #ff5a64) right bottom / 2px 10px;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.9));
+  animation: lock-in 0.16s ease-out;
+}
+@keyframes lock-in {
+  from { transform: scale(1.9) rotate(45deg); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
 
 /* Hit confirm: an X that snaps in on every round that lands. */
 #hitmarker {
@@ -364,9 +403,13 @@ html, body {
   display: grid;
   place-items: center;
   background: rgba(4, 6, 10, 0.72);
-  padding: 24px;
+  padding: calc(24px + var(--safe-t)) calc(24px + var(--safe-r)) calc(24px + var(--safe-b)) calc(24px + var(--safe-l));
   z-index: 20;
+  /* A menu taller than the screen scrolls instead of hiding its button. */
+  overflow-y: auto;
+  touch-action: pan-y;
 }
+.screen * { touch-action: pan-y; }
 .panel {
   width: min(520px, 100%);
   background: rgba(10, 14, 20, 0.92);
@@ -436,4 +479,19 @@ input[type="range"], select { width: 100%; margin-top: 4px; }
   .joy { width: 150px; height: 150px; }
   .fire { width: 136px; height: 136px; }
   .mid-left { top: calc(96px + var(--safe-t)); }
+}
+
+/* Phones in landscape are short. Menus go wide and tight so the button is on screen. */
+@media (max-height: 520px) {
+  .screen { padding-top: calc(10px + var(--safe-t)); padding-bottom: calc(10px + var(--safe-b)); }
+  .panel { width: min(780px, 100%); padding: 12px 18px; }
+  .panel h1 { font-size: 19px; margin: 3px 0 5px; }
+  .panel p { margin: 5px 0; font-size: 12.5px; line-height: 1.3; }
+  .panel .brand { font-size: 10.5px; }
+  .brief { margin: 5px 0; font-size: 12px; line-height: 1.3; columns: 2; column-gap: 28px; }
+  .brief li { break-inside: avoid; margin-bottom: 3px; }
+  .panel label { margin: 5px 0; font-size: 13px; }
+  .primary, .ghost-btn { min-height: 42px; padding: 8px 16px; }
+  .panel .fine { font-size: 10.5px; margin-top: 5px; }
+  .row { margin-top: 6px; }
 }
