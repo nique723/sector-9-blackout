@@ -316,18 +316,29 @@ export function rayHit(origin, dir, maxDist, colliders) {
   let best = maxDist;
   let hit = null;
   for (const c of colliders) {
-    const t = rayAabb(origin, dir, c, maxDist);
-    if (t !== null && t < best) {
-      best = t;
-      hit = { t, point: origin.clone().addScaledVector(dir, t), collider: c };
+    const r = rayAabb(origin, dir, c, maxDist);
+    if (r !== null && r.t < best) {
+      best = r.t;
+      hit = r;
+      hit.collider = c;
     }
+  }
+  if (hit) {
+    hit.point = origin.clone().addScaledVector(dir, hit.t);
+    hit.normal = new THREE.Vector3();
+    if (hit.axis >= 0) hit.normal.setComponent(hit.axis, hit.sign);
+    else hit.normal.copy(dir).negate();
   }
   return hit;
 }
 
+// Slab test. Returns the entry distance plus which face was entered, so
+// impacts and bullet holes can sit flat on the surface that was hit.
 function rayAabb(origin, dir, box, maxDist) {
   let tmin = 0;
   let tmax = maxDist;
+  let axis = -1;
+  let sign = 0;
   const mins = [box.minX, box.minY ?? 0, box.minZ];
   const maxs = [box.maxX, box.maxY ?? 8, box.maxZ];
   const o = [origin.x, origin.y, origin.z];
@@ -339,12 +350,12 @@ function rayAabb(origin, dir, box, maxDist) {
       let t1 = (mins[i] - o[i]) / d[i];
       let t2 = (maxs[i] - o[i]) / d[i];
       if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
-      tmin = Math.max(tmin, t1);
+      if (t1 > tmin) { tmin = t1; axis = i; sign = d[i] > 0 ? -1 : 1; }
       tmax = Math.min(tmax, t2);
       if (tmax < tmin) return null;
     }
   }
-  return tmin;
+  return { t: tmin, axis, sign };
 }
 
 function makeNoise() {

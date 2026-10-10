@@ -135,24 +135,80 @@ html, body {
 
 .pill { padding: 6px 10px; font-size: 11px; letter-spacing: 0.08em; width: max-content; }
 
+/* Crosshair: four ticks that open with weapon spread, plus a centre dot. */
 #reticle {
+  --gap: 6px;
   position: absolute;
   left: 50%;
-  top: 46%;
-  width: 18px;
-  height: 18px;
-  transform: translate(-50%, -50%);
+  top: 50%;
+  width: 0;
+  height: 0;
   pointer-events: none;
-  border: 1px solid rgba(255,255,255,0.8);
-  border-radius: 50%;
+  color: #fff;
+  transition: opacity 0.12s linear;
 }
-#reticle::before, #reticle::after {
+#reticle.off { opacity: 0.25; }
+#reticle.on-target { color: #ff5a64; }
+#reticle i {
+  position: absolute;
+  background: currentColor;
+  box-shadow: 0 0 2px rgba(0,0,0,0.9);
+}
+#reticle .dot { width: 2px; height: 2px; left: -1px; top: -1px; border-radius: 50%; }
+#reticle .t { width: 2px; height: 8px; left: -1px; bottom: var(--gap); }
+#reticle .b { width: 2px; height: 8px; left: -1px; top: var(--gap); }
+#reticle .l { width: 8px; height: 2px; top: -1px; right: var(--gap); }
+#reticle .r { width: 8px; height: 2px; top: -1px; left: var(--gap); }
+
+/* Hit confirm: an X that snaps in on every round that lands. */
+#hitmarker {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  pointer-events: none;
+  opacity: 0;
+  color: #fff;
+}
+#hitmarker.crit { color: #ffd34d; }
+#hitmarker.kill { color: #ff4350; }
+#hitmarker::before, #hitmarker::after {
   content: "";
   position: absolute;
-  background: #fff;
+  left: 50%;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  margin-left: -1px;
+  background: linear-gradient(currentColor 0 32%, transparent 32% 68%, currentColor 68%);
+  box-shadow: 0 0 3px rgba(0,0,0,0.8);
 }
-#reticle::before { left: 50%; top: -6px; width: 1px; height: 6px; }
-#reticle::after { left: 50%; bottom: -6px; width: 1px; height: 6px; }
+#hitmarker::before { transform: rotate(45deg); }
+#hitmarker::after { transform: rotate(-45deg); }
+#hitmarker.show { animation: hit-pop 0.24s ease-out; }
+#hitmarker.kill.show { animation: hit-pop 0.34s ease-out; }
+@keyframes hit-pop {
+  0% { opacity: 1; transform: scale(1.7); }
+  30% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.1); }
+}
+
+/* Damage numbers that rise off the enemy. */
+#floaters { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.floater {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font: 800 17px/1 ui-sans-serif, system-ui, sans-serif;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.9);
+  will-change: transform, opacity;
+}
+.floater.crit { color: #ffd34d; font-size: 22px; }
+
+#ammo-text.low { color: #ff5a64; }
 
 #marker {
   position: absolute;
