@@ -96,6 +96,22 @@ async function boot() {
     $("screen-start").hidden = false;
     mode = "start";
     window.S9 = { get state() { return snapshot(); } };
+    window.S9.fire = () => tryFire();
+    window.S9.placeTarget = (z) => {
+      const box = new THREE.Mesh(
+        new THREE.BoxGeometry(0.7, 1.5, 0.25),
+        new THREE.MeshStandardMaterial({ color: 0xd24a3a, emissive: 0x5a140e, emissiveIntensity: 0.4 })
+      );
+      box.position.set(0, 0.75, z);
+      scene.add(box);
+      return z;
+    };
+    window.S9.frameClose = () => {
+      player.state = "aim";
+      const head = player.pos.clone().add(new THREE.Vector3(0, 1.45, 0));
+      camera.position.set(player.pos.x + 0.7, 1.7, player.pos.z + 1.6);
+      camera.lookAt(head.x - 0.15, 1.35, player.pos.z - 4);
+    };
     if (location.hash === "#test") {
       window.S9.debug = {
         teleport: (x, z) => { player.pos.set(x, 0, z); },
