@@ -206,7 +206,7 @@ export function alignWeapon(parts, aimPoint, recoil) {
   if (dir.lengthSq() < 0.01) return;
   dir.normalize();
   const up = new THREE.Vector3(0, 1, 0);
-  const look = new THREE.Matrix4().lookAt(origin, origin.clone().add(dir), up);
+  const look = new THREE.Matrix4().lookAt(origin, origin.clone().sub(dir), up);
   const parent = parts.pistol.parent;
   parent.updateWorldMatrix(true, false);
   const parentInv = new THREE.Matrix4().copy(parent.matrixWorld).invert();
