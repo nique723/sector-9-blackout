@@ -3,7 +3,7 @@ import { Sfx } from "./audio.js";
 import { Input } from "./input.js";
 import { makeCell, makePickup, resolve, blocked, segmentClear, rayHit } from "./world.js";
 import { loadSector9Street } from "./load-street.js";
-import { createGhost, applyFace, animateGhost, createEnemy, animateEnemy } from "./actors.js";
+import { createGhost, applyFace, animateGhost, alignWeapon, createEnemy, animateEnemy } from "./actors.js";
 
 const $ = (id) => document.getElementById(id);
 const MAG = 12;
@@ -30,7 +30,8 @@ let camPitch = 0.22;
 let shake = 0;
 let mission;
 let interact = null;
-let pauseReason = null;
+let recoil = 0;
+let tracer = null;
 let resumeGraceUntil = 0;
 let forcePlay = false;
 const aimDir = new THREE.Vector3();
@@ -330,6 +331,7 @@ function update(dt) {
   player.dodgeCd = Math.max(0, player.dodgeCd - dt);
   player.iframes = Math.max(0, player.iframes - dt);
   player.hurtT = Math.max(0, player.hurtT - dt);
+  recoil = Math.max(0, recoil - dt * 1.8);
   if (player.reloadT > 0) {
     player.reloadT = Math.max(0, player.reloadT - dt);
     if (player.reloadT === 0 && player.reloadPending) {
@@ -374,6 +376,9 @@ function update(dt) {
   const moving = move.lengthSq() > 0.01;
   player.state = player.hp <= 0 ? "dead" : player.dodgeT > 0 ? "dodge" : player.reloadT > 0 ? "reload" : player.fireCd > 0.12 ? "shoot" : (input.firing() ? "aim" : moving ? (sprint ? "sprint" : "move") : "idle");
   animateGhost(ghost.parts, player.state, clock.elapsedTime, moving && player.dodgeT <= 0);
+  if (player.state === "aim" || player.state === "shoot") {
+    alignWeapon(ghost.parts, crosshairAimPoint(), recoil);
+  }
   updateCamera(dt);
   updateEnemies(dt);
   updatePickups(dt);
@@ -435,29 +440,35 @@ function tryFire() {
   }
   player.mag -= 1;
   player.fireCd = FIRE_CD;
+  recoil = 0.08;
   sfx.shot();
-  shake = Math.min(0.12, shake + 0.05);
-  ghost.parts.pistol.getWorldPosition(muzzle);
+  shake = Math.min(0.1, shake + 0.04);
+  alignWeapon(ghost.parts, crosshairAimPoint(), recoil);
+  ghost.parts.muzzle.getWorldPosition(muzzle);
   const aimPoint = crosshairAimPoint();
-  const shotDir = aimPoint.sub(muzzle).normalize();
-  const wall = rayHit(muzzle, shotDir, 42, world.colliders);
-  let best = wall ? wall.t : 42;
+  const shotDir = aimPoint.clone().sub(muzzle);
+  const span = shotDir.length();
+  if (span < 0.05) return;
+  shotDir.normalize();
+  const wall = rayHit(muzzle, shotDir, Math.min(42, span + 0.2), world.colliders);
+  let best = wall ? wall.t : Math.min(42, span);
   let hitEnemy = null;
   for (const e of enemies) {
     if (e.dead) continue;
     const to = e.pos.clone().setY(1.2).sub(muzzle);
     const dist = to.length();
     if (dist > best) continue;
-    to.normalize();
-    if (to.dot(shotDir) < 0.985) continue;
-    const lateral = e.pos.clone().setY(1.2).sub(muzzle).addScaledVector(shotDir, -dist).length();
+    const dir = to.clone().normalize();
+    if (dir.dot(shotDir) < 0.985) continue;
+    const lateral = to.addScaledVector(shotDir, -dist).length();
     if (lateral < 0.55) {
       best = dist;
       hitEnemy = e;
     }
   }
-  const impactAt = muzzle.clone().addScaledVector(shotDir, Math.max(0.4, best));
+  const impactAt = muzzle.clone().addScaledVector(shotDir, Math.max(0.35, best));
   spawnFlash(muzzle);
+  spawnTracer(muzzle, impactAt);
   spawnImpact(impactAt, hitEnemy ? 0xff4455 : 0xffe0a0);
   if (hitEnemy) damageEnemy(hitEnemy, 15);
   if (player.mag === 0) tryReload();
@@ -664,6 +675,14 @@ function updateFx(dt) {
       flashes.splice(i, 1);
     }
   }
+  if (tracer) {
+    tracer.userData.life -= dt;
+    if (tracer.userData.life <= 0) {
+      scene.remove(tracer);
+      tracer.geometry.dispose();
+      tracer = null;
+    }
+  }
   const dummy = new THREE.Object3D();
   impacts.items = impacts.items.filter((it) => (it.life -= dt) > 0);
   impacts.mesh.count = impacts.items.length;
@@ -681,6 +700,14 @@ function spawnFlash(pos) {
   light.position.copy(pos);
   scene.add(light);
   flashes.push({ light, life: 0.06 });
+}
+
+function spawnTracer(from, to) {
+  if (tracer) scene.remove(tracer);
+  const geo = new THREE.BufferGeometry().setFromPoints([from.clone(), to.clone()]);
+  tracer = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffe2a8 }));
+  tracer.userData.life = 0.08;
+  scene.add(tracer);
 }
 
 function makeImpacts() {
