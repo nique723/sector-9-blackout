@@ -210,6 +210,40 @@ html, body {
 
 #ammo-text.low { color: #ff5a64; }
 
+.floater.callout {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: #ffd9a8;
+  background: rgba(10, 12, 16, 0.6);
+  padding: 3px 6px;
+  border-radius: 4px;
+}
+
+/* Damage direction: a red arc on the ring around the crosshair, pointing at the shooter. */
+#hurt-dir {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(56vh, 340px);
+  height: min(56vh, 340px);
+  margin: calc(min(56vh, 340px) / -2) 0 0 calc(min(56vh, 340px) / -2);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.5s ease-out;
+}
+#hurt-dir.on { opacity: 1; transition: opacity 0.05s linear; }
+#hurt-dir i {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 44%;
+  height: 14%;
+  transform: translateX(-50%);
+  border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  border-top: 5px solid rgba(255, 50, 60, 0.9);
+  filter: drop-shadow(0 0 6px rgba(255, 30, 40, 0.8));
+}
+
 #marker {
   position: absolute;
   width: 14px;

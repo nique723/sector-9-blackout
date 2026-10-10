@@ -6,14 +6,18 @@ import { clone as cloneSkinned } from "three/addons/utils/SkeletonUtils.js";
 // body: the gun is placed where the shot actually leaves from, and the arms
 // are solved onto it. So the barrel, the tracer and the crosshair always agree.
 //
-// SWAPPING THE MODEL
-// Drop a rigged GLB at assets/characters/ghost.glb (or enemy.glb). It needs a
+// SWAPPING A MODEL
+// Point an entry below at a rigged GLB in assets/characters/. It needs a
 // Mixamo-style skeleton (Hips, Spine, Spine1, Spine2, Head, Left/RightArm,
 // ForeArm, Hand) and clips whose names contain "idle", "walk" and "run".
-// Set `faces` to Math.PI if the model looks down -Z instead of +Z.
+// Optional clips are picked up by name and replace the procedural versions:
+// "hit" (flinch), "death" (one or more; one named "head" is used for
+// headshots), "reload". Set `faces` to Math.PI if the model looks down -Z.
+// Entries that share a file load it once.
 const MODELS = {
   ghost: { file: "ghost.glb", faces: Math.PI, walkSpeed: 1.5, runSpeed: 4.3 },
-  enemy: { file: "enemy.glb", faces: 0, walkSpeed: 1.5, runSpeed: 4.3 }
+  // Stand-in for the Blackout Crew until the Mixamo militia is converted.
+  crew: { file: "ghost.glb", faces: Math.PI, walkSpeed: 1.5, runSpeed: 4.3 }
 };
 
 const UP = new THREE.Vector3(0, 1, 0);
@@ -33,14 +37,20 @@ const smooth = (t) => t * t * (3 - 2 * t);
 
 export async function loadCharacters(base = "assets/characters/") {
   const loader = new GLTFLoader();
+  const files = {};
   const out = {};
   await Promise.all(Object.entries(MODELS).map(async ([key, spec]) => {
-    const gltf = await loader.loadAsync(base + spec.file);
+    files[spec.file] = files[spec.file] || loader.loadAsync(base + spec.file);
+    const gltf = await files[spec.file];
     const find = (re) => gltf.animations.find((c) => re.test(c.name));
     const clips = { idle: find(/idle/i), walk: find(/walk/i), run: find(/run/i) };
     for (const [name, clip] of Object.entries(clips)) {
       if (!clip) throw new Error(`${spec.file} has no "${name}" animation`);
     }
+    clips.hit = find(/hit|react/i) || null;
+    clips.reload = find(/reload/i) || null;
+    clips.deaths = gltf.animations.filter((c) => /death|dying|die/i.test(c.name));
+    clips.headDeath = clips.deaths.find((c) => /head/i.test(c.name)) || null;
     out[key] = { scene: gltf.scene, clips, spec };
   }));
   return out;
@@ -153,7 +163,8 @@ function makePistol() {
   return g;
 }
 
-function makeRifle(glow) {
+// kind: "rifle" | "smg" | "heavy"
+function makeRifle(glow, kind = "rifle") {
   const g = new THREE.Group();
   const dark = metal(0x1a1d22, { roughness: 0.45 });
   const add = (geo, mat, x, y, z, rx = 0) => {
@@ -169,6 +180,15 @@ function makeRifle(glow) {
   add(new THREE.BoxGeometry(0.035, 0.13, 0.06), dark, 0, -0.06, 0.15, -0.15);
   add(new THREE.BoxGeometry(0.052, 0.012, 0.3), new THREE.MeshStandardMaterial({ color: glow, emissive: glow, emissiveIntensity: 2.2 }), 0, 0.072, 0.12);
   g.userData.muzzle = new THREE.Vector3(0, 0.035, 0.58);
+  if (kind === "smg") {
+    g.scale.set(1, 1, 0.72);
+  } else if (kind === "heavy") {
+    g.scale.set(1.45, 1.3, 1.08);
+    const drum = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.06, 12), dark);
+    drum.rotation.z = Math.PI / 2;
+    drum.position.set(0, -0.07, 0.1);
+    g.add(drum);
+  }
   return g;
 }
 
@@ -223,7 +243,8 @@ function makeCoat() {
 }
 
 export class Rig {
-  // opts: { height, weapon: "pistol" | "rifle", mono, body, glow, glowPower, coat }
+  // opts: { height, weapon: "pistol" | "rifle", gun: "rifle" | "smg" | "heavy",
+  //         mono, tint, body, glow, glowPower, coat, armband, bulk }
   constructor(asset, opts = {}) {
     this.spec = asset.spec;
     this.opts = opts;
@@ -252,6 +273,8 @@ export class Rig {
           mat.color.setHex(opts.body);
           mat.metalness = 0.55;
           mat.roughness = 0.5;
+        } else if (opts.tint !== undefined) {
+          mat.color.setHex(opts.tint);
         } else if (opts.mono !== undefined) {
           // Keep the texture's detail but drop its colour, so the suit reads
           // as black tactical gear instead of the stock model's tan.
@@ -278,6 +301,7 @@ export class Rig {
       if (!v) throw new Error(`${this.spec.file}: skeleton is missing the ${k} bone`);
     }
 
+    this.clips = asset.clips;
     this.mixer = new THREE.AnimationMixer(this.model);
     this.act = {};
     for (const key of ["idle", "walk", "run"]) {
@@ -296,7 +320,23 @@ export class Rig {
     const headY = this.bones.head.getWorldPosition(va).y;
     this.model.scale.multiplyScalar((this.height * 0.87) / Math.max(0.01, headY));
 
-    this.weapon = opts.weapon === "rifle" ? makeRifle(opts.glow ?? 0xff3344) : makePistol();
+    if (opts.bulk) this.model.scale.x *= opts.bulk, this.model.scale.z *= opts.bulk;
+
+    // Glowing armbands: team colour readable at a glance from any angle.
+    if (opts.armband !== undefined) {
+      const bandMat = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: opts.armband, emissiveIntensity: 2.6, side: THREE.DoubleSide });
+      this.group.updateMatrixWorld(true);
+      for (const [arm, fore] of [[this.bones.armL, this.bones.foreL], [this.bones.armR, this.bones.foreR]]) {
+        const ws = arm.getWorldScale(va).x;
+        const len = arm.getWorldPosition(vb).distanceTo(fore.getWorldPosition(vc));
+        const band = new THREE.Mesh(new THREE.CylinderGeometry(0.068, 0.062, 0.1, 14, 1, true), bandMat);
+        band.scale.setScalar(1 / ws);
+        band.position.y = (len * 0.42) / ws;
+        arm.add(band);
+      }
+    }
+
+    this.weapon = opts.weapon === "rifle" ? makeRifle(opts.glow ?? 0xff3344, opts.gun) : makePistol();
     this.group.add(this.weapon);
     this.rifle = opts.weapon === "rifle";
     if (!this.rifle) {
@@ -321,6 +361,37 @@ export class Rig {
     this.right = new THREE.Vector3(1, 0, 0);
     this.footDown = false;
     this.stepped = false;
+    this.oneShot = null;     // { action, t, dur, hold }
+    this.flinch = 0;
+    this.deathPlayed = false;
+  }
+
+  // One-shot clips layered over locomotion. Returns false when the model has
+  // no such clip, so the caller can fall back to the procedural version.
+  playOnce(clip, hold = false) {
+    if (!clip) return false;
+    if (this.oneShot) this.oneShot.action.stop();
+    const action = this.mixer.clipAction(clip);
+    action.reset();
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
+    action.play();
+    this.oneShot = { action, t: 0, dur: clip.duration, hold };
+    return true;
+  }
+
+  // Hit reaction: the clip if there is one, otherwise a procedural flinch.
+  react(head = false) {
+    this.flinch = head ? 1.25 : 1;
+    if (this.clips.hit && !this.deathPlayed) this.playOnce(this.clips.hit);
+  }
+
+  // Start the death animation. Returns true if a clip is playing it.
+  die(head = false) {
+    const c = this.clips;
+    const clip = (head && c.headDeath) || (c.deaths.length ? c.deaths[Math.floor(Math.random() * c.deaths.length)] : null);
+    this.deathPlayed = this.playOnce(clip, true);
+    return this.deathPlayed;
   }
 
   // Where a shot leaves from when aiming at `aimPoint`. Pure maths, no bones,
@@ -381,13 +452,28 @@ export class Rig {
     this.act.idle.time = this.idleT;
     this.act.walk.time = this.phase * walkClip.duration;
     this.act.run.time = this.phase * runClip.duration;
-    for (const key of ["idle", "walk", "run"]) this.act[key].setEffectiveWeight(this.w[key] / sum);
+    let shotW = 0;
+    if (this.oneShot) {
+      const o = this.oneShot;
+      o.t += dt;
+      const fadeIn = clamp(o.t / 0.08, 0, 1);
+      const fadeOut = o.hold ? 1 : clamp((o.dur - o.t) / 0.15, 0, 1);
+      shotW = fadeIn * fadeOut;
+      o.action.time = Math.min(o.t, o.dur - 1e-3);
+      o.action.setEffectiveWeight(shotW);
+      if (!o.hold && o.t >= o.dur) {
+        o.action.stop();
+        this.oneShot = null;
+        shotW = 0;
+      }
+    }
+    for (const key of ["idle", "walk", "run"]) this.act[key].setEffectiveWeight((this.w[key] / sum) * (1 - shotW));
     this.mixer.update(0);
 
     // --- Whole-body poses with no clip behind them.
     let tiltX = 0;
     let dropY = 0;
-    if (s.pose === "dead") {
+    if (s.pose === "dead" && !this.deathPlayed) {
       const t = clamp(s.poseT, 0, 1);
       const fall = t * t;
       const bounce = t > 0.82 ? Math.sin((t - 0.82) / 0.18 * Math.PI) * 0.05 : 0;
@@ -404,7 +490,7 @@ export class Rig {
     this.group.updateMatrixWorld(true);
 
     // No death clip, so let the arms fall open as the body goes down.
-    if (s.pose === "dead") {
+    if (s.pose === "dead" && !this.deathPlayed) {
       const open = smooth(clamp(s.poseT, 0, 1)) * 0.85;
       const axis = va.set(Math.sin(s.facing), 0, Math.cos(s.facing)).clone();
       applyWorldDelta(B.armR, q1.setFromAxisAngle(axis, open).clone());
@@ -413,6 +499,16 @@ export class Rig {
 
     // Legs follow the direction of travel, chest stays on target.
     if (s.lower) applyWorldDelta(B.spine, q1.setFromAxisAngle(UP, -s.lower).clone());
+
+    // Procedural flinch: the chest snaps back and twists, then recovers.
+    this.flinch = Math.max(0, this.flinch - dt * 5);
+    if (this.flinch > 0.01 && !this.clips.hit && s.pose !== "dead") {
+      const f = Math.sin(this.flinch * Math.PI * 0.5) * this.flinch;
+      const r = va.set(-Math.cos(s.facing), 0, Math.sin(s.facing)).clone();
+      applyWorldDelta(B.spine1, q1.setFromAxisAngle(r, -0.32 * f).clone());
+      applyWorldDelta(B.spine2, q1.setFromAxisAngle(UP, 0.25 * f).clone());
+      applyWorldDelta(B.head, q1.setFromAxisAngle(r, -0.3 * f).clone());
+    }
 
     const dead = s.pose === "dead";
     const wantAim = !!s.aim && !!s.aimPoint && !dead && !s.knife;
