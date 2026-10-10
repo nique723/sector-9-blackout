@@ -7,11 +7,11 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="theme-color" content="#07090d" />
   <title>Sector 9 — Caldosta Under Siege</title>
-  <link rel="stylesheet" href="css/game.css?v=19" />
+  <link rel="stylesheet" href="css/game.css?v=21" />
 </head>
 <body>
   <div id="app">
-    <div id="build-stamp">BUILD 20</div>
+    <div id="build-stamp">BUILD 21</div>
 
     <canvas id="view"></canvas>
 
@@ -50,6 +50,7 @@
       <div id="marker" hidden></div>
       <div id="floaters"></div>
       <div id="reticle"><i class="dot"></i><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i></div>
+      <div id="lock" hidden><i></i></div>
       <div id="hitmarker"></div>
       <div id="hurt-dir"><i></i></div>
       <div id="banner" hidden></div>
@@ -68,7 +69,7 @@
           <button class="btn small" id="btn-reload" type="button" data-action="reload">RELOAD</button>
           <button class="btn small" id="btn-weapon" type="button" data-action="weapon">SWAP</button>
           <div class="cluster">
-            <button class="btn" id="btn-melee" type="button" data-action="melee">MELEE</button>
+            <button class="btn" id="btn-melee" type="button" data-action="melee">PUNCH</button>
             <button class="btn" id="btn-dodge" type="button" data-action="dodge">DODGE</button>
             <button class="btn" id="btn-use" type="button" data-action="use">USE</button>
           </div>
@@ -96,7 +97,8 @@
         <p>The Blackout Crew cut the power to Caldosta. Ghost is in Sector 9. Collect three power cells, survive the patrol and three waves, then bring the communications tower back online.</p>
         <ul class="brief">
           <li>Left thumb: move. Sprint is a toggle.</li>
-          <li>Right thumb: hold Fire to shoot, drag to aim.</li>
+          <li>Right thumb: hold Fire to shoot, drag to aim. Fire locks on to the target nearest the crosshair.</li>
+          <li>Punch throws the jab. Tap again for the cross. A clean 1-2 drops a Patrol.</li>
           <li>Drag the open right side to aim without firing.</li>
           <li>Red armbands hold cover. Cyan flank. Orange push. Reloads are your opening.</li>
         </ul>
@@ -117,6 +119,7 @@
           </select>
         </label>
         <label>Volume <input id="volume" type="range" min="0" max="1" step="0.05" value="0.7" /></label>
+        <label class="check"><input id="aim-lock" type="checkbox" checked /> Aim lock</label>
         <label class="check"><input id="show-fps" type="checkbox" /> Show FPS</label>
         <div class="row">
           <button class="primary" id="btn-resume" type="button">RESUME</button>

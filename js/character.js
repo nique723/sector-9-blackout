@@ -13,11 +13,12 @@ import { clone as cloneSkinned } from "three/addons/utils/SkeletonUtils.js";
 // Optional clips are picked up by name and replace the procedural versions:
 // "hit" (flinch), "death" (one or more; one named "head" is used for
 // headshots), "reload". Set `faces` to Math.PI if the model looks down -Z.
-// Entries that share a file load it once.
+// Entries that share a file load it once. `fist: true` means the four fingers
+// are skinned to the Middle1-3 bones, so the rig can close the hands itself.
 const MODELS = {
   // Ghost: the Meshy "Crimson Sentinel" mesh bound to the Mixamo skeleton.
   // headFrac is how far up the body the head bone sits (hair adds height).
-  ghost: { file: "ghost.glb", faces: Math.PI, walkSpeed: 1.5, runSpeed: 4.3, headFrac: 0.886 },
+  ghost: { file: "ghost.glb", faces: Math.PI, walkSpeed: 1.5, runSpeed: 4.3, headFrac: 0.886, fist: true },
   // Stand-in for the Blackout Crew until the Mixamo militia is converted.
   crew: { file: "crew.glb", faces: Math.PI, walkSpeed: 1.5, runSpeed: 4.3 }
 };
@@ -33,6 +34,8 @@ const vd = new THREE.Vector3();
 const ve = new THREE.Vector3();
 const m1 = new THREE.Matrix4();
 
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
+const FIST_CURL = [1.3, 1.65, 1.05];   // radians per knuckle for a closed fist
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 const smooth = (t) => t * t * (3 - 2 * t);
@@ -302,6 +305,15 @@ export class Rig {
     for (const [k, v] of Object.entries(this.bones)) {
       if (!v) throw new Error(`${this.spec.file}: skeleton is missing the ${k} bone`);
     }
+    if (this.spec.fist) {
+      this.fingers = {
+        R: [b("RightHandMiddle1"), b("RightHandMiddle2"), b("RightHandMiddle3")],
+        L: [b("LeftHandMiddle1"), b("LeftHandMiddle2"), b("LeftHandMiddle3")]
+      };
+      this.curl = { R: 0.8, L: 0.25 };
+    }
+    this.punchW = 0;
+    this.punchSide = "L";
 
     this.clips = asset.clips;
     this.mixer = new THREE.AnimationMixer(this.model);
@@ -425,7 +437,10 @@ export class Rig {
     }
   }
 
-  // s: { pos, facing, lower, speed, backward, aim, aimPoint, kick, pose, poseT, knife, snapAim }
+  // s: { pos, facing, lower, speed, backward, aim, aimPoint, kick, pose, poseT, knife, snapAim,
+  //      guard, punchAt }
+  // pose "jab" (lead left) and "cross" (rear right) throw a punch over poseT 0..1;
+  // guard keeps the hands up between punches; punchAt is the point to hit.
   update(dt, s) {
     const B = this.bones;
     const H = this.height / 1.82;
@@ -513,7 +528,23 @@ export class Rig {
     }
 
     const dead = s.pose === "dead";
-    const wantAim = !!s.aim && !!s.aimPoint && !dead && !s.knife;
+    // --- Boxing. Extension 0..1: out fast, back slower.
+    const punching = !dead && (s.pose === "jab" || s.pose === "cross");
+    const boxing = punching || (!!s.guard && !dead);
+    this.punchW += ((boxing ? 1 : 0) - this.punchW) * (1 - Math.exp(-dt * (boxing ? 26 : 10)));
+    let ext = 0;
+    if (punching) {
+      const t = clamp(s.poseT, 0, 1);
+      ext = t < 0.4 ? 1 - Math.pow(1 - t / 0.4, 3) : 1 - smooth((t - 0.4) / 0.6);
+      this.punchSide = s.pose === "jab" ? "L" : "R";
+      // Shoulders turn into the punch: a little for the jab, a lot for the cross.
+      const twist = (s.pose === "jab" ? -0.2 : 0.62) * ext / 3;
+      const turn = q1.setFromAxisAngle(UP, twist).clone();
+      applyWorldDelta(B.spine, turn);
+      applyWorldDelta(B.spine1, turn);
+      applyWorldDelta(B.spine2, turn);
+    }
+    const wantAim = !!s.aim && !!s.aimPoint && !dead && !s.knife && !boxing;
     if (s.snapAim && wantAim) this.aimW = Math.max(this.aimW, 0.85);
     this.aimW += ((wantAim ? 1 : 0) - this.aimW) * (1 - Math.exp(-dt * (wantAim ? 20 : 9)));
     const posed = s.pose === "reload" || s.pose === "melee";
@@ -587,13 +618,55 @@ export class Rig {
 
     // --- Arms.
     const wrist = grip.clone().addScaledVector(gunDir, -0.05).addScaledVector(UP, -0.035);
+    const handDirR = gunDir.clone();
+    const handDirL = vb.copy(gunDir).addScaledVector(rightV, 0.7).normalize().clone();
+    const bw = this.punchW;
+    if (bw > 0.01) {
+      // Guard: lead hand out in front of the chin, rear hand by the cheek.
+      const guardL = frame.chest.clone().addScaledVector(fwd, 0.27 * H).addScaledVector(rightV, -0.1 * H);
+      guardL.y += 0.12 * H;
+      const guardR = frame.chest.clone().addScaledVector(fwd, 0.17 * H).addScaledVector(rightV, 0.11 * H);
+      guardR.y += 0.1 * H;
+      const strike = s.punchAt ? s.punchAt.clone() : frame.chest.clone().addScaledVector(fwd, 0.8 * H).setY(frame.chest.y + 0.2 * H);
+      const up = va.set(0, 0.85, 0).addScaledVector(fwd, 0.5).normalize().clone();
+      const tR = guardR.clone();
+      const tL = guardL.clone();
+      const dR = up.clone();
+      const dL = up.clone();
+      if (ext > 0) {
+        const hand = this.punchSide === "L" ? tL : tR;
+        const dir = this.punchSide === "L" ? dL : dR;
+        const line = strike.clone().sub(hand).normalize();
+        hand.lerp(strike, ext);
+        dir.lerp(line, Math.min(1, ext * 1.6)).normalize();
+      }
+      wrist.lerp(tR, bw);
+      leftTarget.lerp(tL, bw);
+      handDirR.lerp(dR, bw).normalize();
+      handDirL.lerp(dL, bw).normalize();
+      ikR = Math.max(ikR, bw);
+      ikL = Math.max(ikL, bw);
+    }
     if (ikR > 0.01) {
       solveArm(B.armR, B.foreR, B.handR, wrist, va.set(0, -1, 0).addScaledVector(rightV, 0.55).addScaledVector(fwd, -0.2).clone(), ikR);
-      pointBone(B.handR, B.tipR, gunDir, ikR);
+      pointBone(B.handR, B.tipR, handDirR, ikR);
     }
     if (ikL > 0.01) {
       solveArm(B.armL, B.foreL, B.handL, leftTarget, va.set(0, -1, 0).addScaledVector(rightV, -0.6).addScaledVector(fwd, -0.1).clone(), ikL);
-      pointBone(B.handL, B.tipL, vb.copy(gunDir).addScaledVector(rightV, 0.7).normalize().clone(), ikL);
+      pointBone(B.handL, B.tipL, handDirL, ikL);
+    }
+
+    // --- Fingers: fists to box, a grip on the gun, loose otherwise.
+    if (this.fingers) {
+      const fists = bw > 0.3;
+      const wantR = fists ? 1 : 0.8;
+      const wantL = fists ? 1 : ikL > 0.5 ? 0.6 : 0.25;
+      const kf = 1 - Math.exp(-dt * 18);
+      this.curl.R += (wantR - this.curl.R) * kf;
+      this.curl.L += (wantL - this.curl.L) * kf;
+      for (const side of ["R", "L"]) {
+        this.fingers[side].forEach((bone, i) => { if (bone) bone.quaternion.setFromAxisAngle(Z_AXIS, this.curl[side] * FIST_CURL[i]); });
+      }
     }
 
     // --- Place the weapon. Lowered: it rides in the hand. Raised: it sits on
@@ -606,8 +679,8 @@ export class Rig {
     this.gunDir.copy(finalDir);
     const item = s.knife && this.knife ? this.knife : this.weapon;
     if (this.knife) {
-      this.knife.visible = !!s.knife && !dead;
-      this.weapon.visible = !s.knife;
+      this.knife.visible = !!s.knife && !dead && bw < 0.3;
+      this.weapon.visible = !s.knife && bw < 0.3;   // holstered while the fists are up
     }
     m1.lookAt(finalDir, va.set(0, 0, 0), UP);
     const worldQ = q1.setFromRotationMatrix(m1);
