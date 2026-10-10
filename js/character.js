@@ -15,9 +15,11 @@ import { clone as cloneSkinned } from "three/addons/utils/SkeletonUtils.js";
 // headshots), "reload". Set `faces` to Math.PI if the model looks down -Z.
 // Entries that share a file load it once.
 const MODELS = {
-  ghost: { file: "ghost.glb", faces: Math.PI, walkSpeed: 1.5, runSpeed: 4.3 },
+  // Ghost: the Meshy "Crimson Sentinel" mesh bound to the Mixamo skeleton.
+  // headFrac is how far up the body the head bone sits (hair adds height).
+  ghost: { file: "ghost.glb", faces: Math.PI, walkSpeed: 1.5, runSpeed: 4.3, headFrac: 0.886 },
   // Stand-in for the Blackout Crew until the Mixamo militia is converted.
-  crew: { file: "ghost.glb", faces: Math.PI, walkSpeed: 1.5, runSpeed: 4.3 }
+  crew: { file: "crew.glb", faces: Math.PI, walkSpeed: 1.5, runSpeed: 4.3 }
 };
 
 const UP = new THREE.Vector3(0, 1, 0);
@@ -318,7 +320,7 @@ export class Rig {
     this.mixer.update(0);
     this.group.updateMatrixWorld(true);
     const headY = this.bones.head.getWorldPosition(va).y;
-    this.model.scale.multiplyScalar((this.height * 0.87) / Math.max(0.01, headY));
+    this.model.scale.multiplyScalar((this.height * (this.spec.headFrac ?? 0.87)) / Math.max(0.01, headY));
 
     if (opts.bulk) this.model.scale.x *= opts.bulk, this.model.scale.z *= opts.bulk;
 

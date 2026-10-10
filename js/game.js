@@ -47,6 +47,19 @@ const ENEMY = {
   hunter: { role: "flank", tint: 0x6d777d, glow: 0x39e0ff, scale: 0.95, bulk: 0.93, gun: "smg", hp: 30, speed: 4.5, dmg: 5, range: 10, hold: 5, mag: 9, burst: 3, burstGap: 0.09, cd: 1, xp: 10 },
   enforcer: { role: "push", tint: 0x5b544d, glow: 0xff8a1e, scale: 1.16, bulk: 1.16, gun: "heavy", hp: 110, speed: 1.9, dmg: 6, range: 12, hold: 3.5, mag: 12, burst: 4, burstGap: 0.11, cd: 1.35, xp: 20 }
 };
+// Ambushes: Blackout Crew stragglers that pop up at random, from behind cover
+// or from wherever Ghost is not looking. Times are seconds, distances metres.
+const AMBUSH = {
+  first: [8, 14],   // before the first one
+  gap: [10, 18],    // between ambushes
+  pair: 0.35,       // chance that two come at once
+  quiet: 3,         // outside a fight, hold off while this many are alive
+  maxAlive: 5,      // during a patrol or wave, never stack past this
+  perFight: 2,      // extra bodies allowed per patrol or wave
+  near: 10,
+  far: 24,
+  rise: 0.45        // time to stand up from behind cover
+};
 const WINDUP = 0.42;           // enemy raises and steadies before each burst
 const ENEMY_RELOAD = 1.8;      // the window to push them
 
@@ -136,7 +149,7 @@ async function boot() {
       loadCharacters("assets/characters/")
     ]);
     buildCover();
-    ghost = new Rig(chars.ghost, { height: 1.84, weapon: "pistol", mono: 0x5c5e66, glow: 0xb00f1c, glowPower: 0.45, coat: true });
+    ghost = new Rig(chars.ghost, { height: 1.84, weapon: "pistol" });
     scene.add(ghost.group);
     fx = new Fx(scene, quality);
     enemies = [];
@@ -181,6 +194,8 @@ function installDebug() {
     enemyState: () => enemies.map((e) => ({ type: e.type, hp: e.hp, dead: e.dead, x: +e.pos.x.toFixed(2), z: +e.pos.z.toFixed(2), cover: !!e.cover, ammo: e.ammo, reloading: e.reloadT > 0 })),
     cover: () => coverPoints.map((c) => [+c.pos.x.toFixed(2), +c.pos.z.toFixed(2)]),
     wake: () => enemies.forEach((e) => { e.passive = false; }),
+    ambush: (n = 1) => spawnAmbush(n),
+    ambushIn: (t) => { mission.ambushT = t; },
     killAll: () => enemies.forEach((e) => { if (!e.dead) damageEnemy(e, 999, false, e.pos.clone().setY(1.2), new THREE.Vector3(0, 0, 1)); }),
     hurt: (n) => hurtPlayer(n),
     emptyMag: () => { player.mag = 0; },
@@ -252,6 +267,9 @@ function resetMission() {
     wavesDone: 0,
     queue: [],
     waveLive: false,
+    ambushT: lerp(AMBUSH.first[0], AMBUSH.first[1], Math.random()),
+    ambushFight: 0,
+    ambushes: 0,
     xp: 0,
     objective: "COLLECT THE FIRST POWER CELL"
   };
@@ -945,6 +963,7 @@ function spawnPatrol() {
 
 function queueSpawns(types) {
   mission.queue.push(...types);
+  mission.ambushFight = 0;
 }
 
 // --- Enemies ---------------------------------------------------------------
@@ -988,6 +1007,8 @@ function makeEnemy(type) {
     dead: false,
     deadT: 0,
     passive: false,
+    ambush: false,
+    riseT: 0,
     facing: 0,
     curSpeed: 0,
     strafe: Math.random() < 0.5 ? -1 : 1,
@@ -1001,19 +1022,97 @@ function removeEnemy(e) {
   e.rig.dispose();
 }
 
-function spawnEnemy(type) {
+function spawnEnemy(type, at = null) {
   const e = makeEnemy(type);
-  // Come in from somewhere the player is not standing.
-  const far = SPAWN_SPOTS.filter((s) => s.distanceTo(player.pos) > 13);
-  const pool = far.length ? far : SPAWN_SPOTS;
-  e.pos.copy(pool[Math.floor(Math.random() * pool.length)]);
-  e.pos.x += (Math.random() - 0.5) * 2.4;
-  e.pos.z += (Math.random() - 0.5) * 2.4;
-  resolve(e.pos, 0.5, world.colliders);
+  if (at) {
+    e.pos.copy(at);
+  } else {
+    // Come in from somewhere the player is not standing.
+    const far = SPAWN_SPOTS.filter((s) => s.distanceTo(player.pos) > 13);
+    const pool = far.length ? far : SPAWN_SPOTS;
+    e.pos.copy(pool[Math.floor(Math.random() * pool.length)]);
+    e.pos.x += (Math.random() - 0.5) * 2.4;
+    e.pos.z += (Math.random() - 0.5) * 2.4;
+    resolve(e.pos, 0.5, world.colliders);
+    mission.waveLive = true;
+  }
   e.facing = Math.atan2(player.pos.x - e.pos.x, player.pos.z - e.pos.z);
   e.lastSeen.copy(player.pos);
   enemies.push(e);
-  mission.waveLive = true;
+  return e;
+}
+
+// --- Ambushes --------------------------------------------------------------
+
+// Where an ambusher appears. Either a cover spot whose barricade or dumpster
+// sits between it and Ghost (they stand up from behind it), or open ground
+// outside the camera's view.
+function ambushSpot(taken) {
+  const inRange = (p) => {
+    const d = p.distanceTo(player.pos);
+    return d >= AMBUSH.near && d <= AMBUSH.far && taken.every((t) => t.distanceTo(p) > 1.6);
+  };
+  const cover = coverPoints.filter((c) => (!c.owner || c.owner.dead) && inRange(c.pos) && covers(c, player.pos));
+  const b = world.layout.bounds;
+  const open = [];
+  for (let i = 0; i < 30 && open.length < 4; i++) {
+    const p = new THREE.Vector3(lerp(b.minX + 1, b.maxX - 1, Math.random()), 0, lerp(b.minZ + 1, b.maxZ - 1, Math.random()));
+    if (!inRange(p)) continue;
+    const q = p.clone();
+    resolve(q, 0.5, world.colliders);
+    if (q.distanceTo(p) > 0.05) continue;
+    const dx = p.x - camera.position.x;
+    const dz = p.z - camera.position.z;
+    const facing = (dx * lookDir.x + dz * lookDir.z) / Math.max(0.001, Math.hypot(dx, dz));
+    if (facing < 0.2) open.push(p);
+  }
+  const useCover = cover.length && (!open.length || Math.random() < 0.6);
+  if (useCover) return { pos: cover[Math.floor(Math.random() * cover.length)].pos.clone(), rise: true };
+  if (open.length) return { pos: open[Math.floor(Math.random() * open.length)], rise: false };
+  return null;
+}
+
+function ambushType() {
+  const late = mission.wavesDone > 0 || mission.phase === "wave" || mission.phase === "tower";
+  const r = Math.random();
+  if (late) return r < 0.4 ? "patrol" : r < 0.82 ? "hunter" : "enforcer";
+  return r < 0.7 ? "patrol" : "hunter";
+}
+
+function spawnAmbush(count) {
+  const taken = [];
+  for (let i = 0; i < count; i++) {
+    const spot = ambushSpot(taken);
+    if (!spot) break;
+    const e = spawnEnemy(ambushType(), spot.pos);
+    e.ambush = true;
+    if (spot.rise) { e.riseT = AMBUSH.rise; e.pos.y = -1; }
+    e.attackT = Math.max(e.attackT, 1.1);
+    taken.push(spot.pos);
+  }
+  if (!taken.length) return 0;
+  mission.ambushes += taken.length;
+  setBanner("AMBUSH");
+  sfx.wave();
+  return taken.length;
+}
+
+function updateAmbush(dt) {
+  if (player.hp <= 0 || mission.phase === "activating") return;
+  mission.ambushT -= dt;
+  if (mission.ambushT > 0) return;
+  const live = enemies.filter((e) => !e.dead).length + mission.queue.length;
+  const fight = mission.phase === "patrol" || mission.phase === "wave";
+  // In a fight they reinforce it, a couple at most, so the fight still ends.
+  const room = fight
+    ? live > 0 && live < AMBUSH.maxAlive && mission.ambushFight < AMBUSH.perFight
+    : live < AMBUSH.quiet;
+  if (!room) { mission.ambushT = 2; return; }
+  let count = Math.random() < AMBUSH.pair ? 2 : 1;
+  if (fight) count = Math.min(count, AMBUSH.perFight - mission.ambushFight, AMBUSH.maxAlive - live);
+  const n = spawnAmbush(count);
+  if (fight) mission.ambushFight += n;
+  mission.ambushT = n ? lerp(AMBUSH.gap[0], AMBUSH.gap[1], Math.random()) : 3;
 }
 
 // Cover: standing spots beside every waist-high object in the street
@@ -1086,6 +1185,7 @@ function steer(e, goal, speed, dt) {
 }
 
 function updateEnemies(dt) {
+  updateAmbush(dt);
   while (mission.queue.length && enemies.filter((e) => !e.dead).length < 5) spawnEnemy(mission.queue.shift());
   calloutT = Math.max(0, calloutT - dt);
 
@@ -1096,6 +1196,12 @@ function updateEnemies(dt) {
     e.hitT = Math.max(0, e.hitT - dt);
     e.kick *= Math.exp(-dt * 14);
     e.rig.flash(e.hitT > 0 ? e.hitT / 0.14 : 0);
+    if (e.riseT > 0) {
+      // Standing up from behind cover.
+      e.riseT = Math.max(0, e.riseT - dt);
+      const k = e.riseT / AMBUSH.rise;
+      e.pos.y = -k * k;
+    }
 
     if (e.dead) {
       e.deadT += dt;
@@ -1409,6 +1515,7 @@ function snapshot() {
     phase: mission?.phase,
     wave: mission?.wave,
     wavesDone: mission?.wavesDone,
+    ambushes: mission?.ambushes,
     xp: mission?.xp,
     enemies: enemies?.filter((e) => !e.dead).length,
     pos: player ? { x: player.pos.x, z: player.pos.z } : null
