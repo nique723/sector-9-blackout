@@ -444,12 +444,16 @@ function tryFire() {
   sfx.shot();
   shake = Math.min(0.1, shake + 0.04);
   alignWeapon(ghost.parts, crosshairAimPoint(), recoil);
+  ghost.parts.muzzle.updateWorldMatrix(true, false);
   ghost.parts.muzzle.getWorldPosition(muzzle);
+  const barrelDir = new THREE.Vector3(0, 0, 1).applyQuaternion(ghost.parts.muzzle.getWorldQuaternion(new THREE.Quaternion()));
   const aimPoint = crosshairAimPoint();
   const shotDir = aimPoint.clone().sub(muzzle);
   const span = shotDir.length();
   if (span < 0.05) return;
   shotDir.normalize();
+  const align = barrelDir.dot(shotDir);
+  window.S9.lastShot = { align: Number(align.toFixed(3)), span: Number(span.toFixed(2)) };
   const wall = rayHit(muzzle, shotDir, Math.min(42, span + 0.2), world.colliders);
   let best = wall ? wall.t : Math.min(42, span);
   let hitEnemy = null;
@@ -669,9 +673,11 @@ function updateMission() {
 function updateFx(dt) {
   for (let i = flashes.length - 1; i >= 0; i--) {
     flashes[i].life -= dt;
-    flashes[i].light.intensity = Math.max(0, flashes[i].life * 8);
+    flashes[i].light.intensity = Math.max(0, flashes[i].life * 40);
+    if (flashes[i].burst) flashes[i].burst.scale.setScalar(Math.max(0.2, flashes[i].life * 12));
     if (flashes[i].life <= 0) {
       scene.remove(flashes[i].light);
+      if (flashes[i].burst) scene.remove(flashes[i].burst);
       flashes.splice(i, 1);
     }
   }
@@ -696,23 +702,38 @@ function updateFx(dt) {
 }
 
 function spawnFlash(pos) {
-  const light = new THREE.PointLight(0xffd2a0, 4, 6, 2);
+  const light = new THREE.PointLight(0xfff1c4, 18, 8, 2);
   light.position.copy(pos);
-  scene.add(light);
-  flashes.push({ light, life: 0.06 });
+  const burst = new THREE.Mesh(
+    new THREE.SphereGeometry(0.12, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xfff6d0 })
+  );
+  burst.position.copy(pos);
+  scene.add(light, burst);
+  flashes.push({ light, burst, life: 0.07 });
 }
 
 function spawnTracer(from, to) {
-  if (tracer) scene.remove(tracer);
-  const geo = new THREE.BufferGeometry().setFromPoints([from.clone(), to.clone()]);
-  tracer = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffe2a8 }));
-  tracer.userData.life = 0.08;
+  if (tracer) {
+    scene.remove(tracer);
+    tracer.geometry.dispose();
+  }
+  const dir = to.clone().sub(from);
+  const len = Math.max(0.2, dir.length());
+  const mesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.015, 0.015, len, 5),
+    new THREE.MeshBasicMaterial({ color: 0xffe7a4 })
+  );
+  mesh.position.copy(from).addScaledVector(dir.normalize(), len * 0.5);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+  tracer = mesh;
+  tracer.userData.life = 0.09;
   scene.add(tracer);
 }
 
 function makeImpacts() {
-  const geo = new THREE.SphereGeometry(0.08, 6, 6);
-  const mat = new THREE.MeshBasicMaterial({ color: 0xffe0b0 });
+  const geo = new THREE.SphereGeometry(0.16, 8, 6);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xfff0b8 });
   const mesh = new THREE.InstancedMesh(geo, mat, 24);
   mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   mesh.count = 0;
@@ -721,7 +742,7 @@ function makeImpacts() {
 }
 
 function spawnImpact(pos) {
-  impacts.items.push({ pos: pos.clone(), life: 0.18 });
+  impacts.items.push({ pos: pos.clone(), life: 0.35 });
   if (impacts.items.length > 24) impacts.items.shift();
   const dummy = new THREE.Object3D();
   impacts.mesh.count = impacts.items.length;

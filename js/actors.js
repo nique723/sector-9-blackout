@@ -166,8 +166,9 @@ export function animateGhost(parts, state, t, moving) {
   if (aiming) {
     parts.armR.pivot.rotation.set(-1.15, -0.35, 0.15);
     parts.armR.lower.rotation.set(-0.35, 0, 0);
-    parts.armL.pivot.rotation.set(-1.05, 0.45, -0.2);
-    parts.armL.lower.rotation.set(-0.4, 0, 0);
+    parts.armL.hand.position.set(0.02, -0.02, 0.04);
+    parts.armL.pivot.rotation.set(-1.2, 0.55, -0.35);
+    parts.armL.lower.rotation.set(-0.55, 0.15, 0);
   } else if (state === "reload") {
     parts.armR.pivot.rotation.set(-0.7, 0, 0);
     parts.armR.lower.rotation.set(-1.05, 0, 0);
