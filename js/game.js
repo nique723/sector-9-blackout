@@ -394,8 +394,8 @@ function update(dt) {
 }
 
 function updateCamera(dt) {
-  const shoulder = 1.15;
-  const dist = 2.8;
+  const shoulder = 0.85;
+  const dist = 2.15;
   const forward = new THREE.Vector3(Math.sin(camYaw), 0, Math.cos(camYaw));
   const right = new THREE.Vector3(forward.z, 0, -forward.x);
   const lookDir = new THREE.Vector3(
@@ -404,7 +404,7 @@ function updateCamera(dt) {
     Math.cos(camYaw) * Math.cos(camPitch)
   );
   const head = player.pos.clone().add(new THREE.Vector3(0, 1.45, 0));
-  const aim = head.clone().addScaledVector(lookDir, 16);
+  const aim = head.clone().addScaledVector(lookDir, 9);
   const desired = head.clone()
     .addScaledVector(forward, -dist)
     .addScaledVector(right, shoulder)
