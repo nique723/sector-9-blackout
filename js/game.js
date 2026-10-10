@@ -30,6 +30,8 @@ let camPitch = 0.22;
 let shake = 0;
 let mission;
 let interact = null;
+let hitCount = 0;
+let shotTarget = null;
 let recoil = 0;
 let tracer = null;
 let resumeGraceUntil = 0;
@@ -97,20 +99,58 @@ async function boot() {
     mode = "start";
     window.S9 = { get state() { return snapshot(); } };
     window.S9.fire = () => tryFire();
-    window.S9.placeTarget = (z) => {
+    window.S9.placeTarget = () => {
+      const forward = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+      const spot = player.pos.clone().addScaledVector(forward, 8);
+      spot.y = 1.25;
       const box = new THREE.Mesh(
-        new THREE.BoxGeometry(0.7, 1.5, 0.25),
+        new THREE.BoxGeometry(1.4, 2.0, 0.25),
         new THREE.MeshStandardMaterial({ color: 0xd24a3a, emissive: 0x5a140e, emissiveIntensity: 0.4 })
       );
-      box.position.set(0, 0.75, z);
+      box.position.copy(spot);
       scene.add(box);
-      return z;
+      shotTarget = {
+        mesh: box,
+        minX: spot.x - 0.75,
+        maxX: spot.x + 0.75,
+        minY: 0.2,
+        maxY: 2.3,
+        minZ: spot.z - 0.75,
+        maxZ: spot.z + 0.75
+      };
+      camera.lookAt(spot);
+      return { x: spot.x, y: spot.y, z: spot.z };
     };
+    window.S9.startRec = () => {
+      const stream = $("view").captureStream(30);
+      const rec = new MediaRecorder(stream, { mimeType: "video/webm;codecs=vp8" });
+      window.S9._chunks = [];
+      window.S9._recDone = null;
+      rec.ondataavailable = (e) => { if (e.data.size) window.S9._chunks.push(e.data); };
+      rec.onstop = () => { window.S9._recDone = true; };
+      rec.start(100);
+      window.S9._rec = rec;
+    };
+    window.S9.stopRec = () => new Promise((resolve) => {
+      const rec = window.S9._rec;
+      if (!rec) return resolve("");
+      rec.onstop = async () => {
+        const blob = new Blob(window.S9._chunks, { type: "video/webm" });
+        const buf = await blob.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let raw = "";
+        const step = 0x8000;
+        for (let i = 0; i < bytes.length; i += step) raw += String.fromCharCode(...bytes.subarray(i, i + step));
+        window.S9._lastB64 = btoa(raw);
+        resolve(window.S9._lastB64.length);
+      };
+      rec.stop();
+    });
     window.S9.frameClose = () => {
       player.state = "aim";
       const head = player.pos.clone().add(new THREE.Vector3(0, 1.4, 0));
-      camera.position.set(player.pos.x + 1.1, 2.15, player.pos.z + 3.4);
-      camera.lookAt(head.x - 0.2, 1.25, player.pos.z - 10);
+      camera.position.set(player.pos.x + 1.35, 1.85, player.pos.z + 2.6);
+      camera.lookAt(head.x + 0.15, 1.35, player.pos.z - 8);
     };
     if (location.hash === "#test") {
       window.S9.debug = {
@@ -475,6 +515,18 @@ function tryFire() {
   const wall = rayHit(muzzle, shotDir, Math.min(42, span + 0.2), world.colliders);
   let best = wall ? wall.t : Math.min(42, span);
   let hitEnemy = null;
+  let hitTarget = false;
+  if (shotTarget) {
+    const center = shotTarget.mesh.position.clone();
+    const toCenter = center.clone().sub(muzzle);
+    const dist = toCenter.length();
+    toCenter.normalize();
+    const aimed = toCenter.dot(shotDir);
+    if (aimed > 0.96 && dist < best) {
+      best = dist;
+      hitTarget = true;
+    }
+  }
   for (const e of enemies) {
     if (e.dead) continue;
     const to = e.pos.clone().setY(1.2).sub(muzzle);
@@ -491,7 +543,12 @@ function tryFire() {
   const impactAt = muzzle.clone().addScaledVector(shotDir, Math.max(0.35, best));
   spawnFlash(muzzle);
   spawnTracer(muzzle, impactAt);
-  spawnImpact(impactAt, hitEnemy ? 0xff4455 : 0xffe0a0);
+  spawnImpact(impactAt, hitEnemy || hitTarget ? 0xff4455 : 0xffe0a0);
+  if (hitTarget) {
+    hitCount += 1;
+    spawnMark(impactAt);
+    syncHud();
+  }
   if (hitEnemy) damageEnemy(hitEnemy, 15);
   if (player.mag === 0) tryReload();
 }
@@ -719,16 +776,46 @@ function updateFx(dt) {
   impacts.mesh.instanceMatrix.needsUpdate = true;
 }
 
-function spawnFlash(pos) {
+function rayAabbHit(origin, dir, box, maxDist) {
+  let tmin = 0;
+  let tmax = maxDist;
+  const mins = [box.minX, box.minY, box.minZ];
+  const maxs = [box.maxX, box.maxY, box.maxZ];
+  const o = [origin.x, origin.y, origin.z];
+  const d = [dir.x, dir.y, dir.z];
+  for (let i = 0; i < 3; i++) {
+    if (Math.abs(d[i]) < 1e-8) {
+      if (o[i] < mins[i] || o[i] > maxs[i]) return null;
+    } else {
+      let t1 = (mins[i] - o[i]) / d[i];
+      let t2 = (maxs[i] - o[i]) / d[i];
+      if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
+      if (t1 > tmin) tmin = t1;
+      if (t2 < tmax) tmax = t2;
+      if (tmin > tmax) return null;
+    }
+  }
+  return tmin >= 0 ? tmin : null;
+}
+
+function spawnMark(pos) {
+  const mark = new THREE.Mesh(
+    new THREE.SphereGeometry(0.09, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xfff3b0 })
+  );
+  mark.position.copy(pos);
+  scene.add(mark);
+}
+  function spawnFlash(pos) {
   const light = new THREE.PointLight(0xfff1c4, 18, 8, 2);
   light.position.copy(pos);
   const burst = new THREE.Mesh(
-    new THREE.SphereGeometry(0.12, 8, 6),
+    new THREE.SphereGeometry(0.16, 8, 6),
     new THREE.MeshBasicMaterial({ color: 0xfff6d0 })
   );
   burst.position.copy(pos);
   scene.add(light, burst);
-  flashes.push({ light, burst, life: 0.16 });
+  flashes.push({ light, burst, life: 0.22 });
 }
 
 function spawnTracer(from, to) {
@@ -739,13 +826,13 @@ function spawnTracer(from, to) {
   const dir = to.clone().sub(from);
   const len = Math.max(0.2, dir.length());
   const mesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.015, 0.015, len, 5),
-    new THREE.MeshBasicMaterial({ color: 0xffe7a4 })
+    new THREE.CylinderGeometry(0.035, 0.035, len, 6),
+    new THREE.MeshBasicMaterial({ color: 0xfff1b0 })
   );
   mesh.position.copy(from).addScaledVector(dir.normalize(), len * 0.5);
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
   tracer = mesh;
-  tracer.userData.life = 0.16;
+  tracer.userData.life = 0.28;
   scene.add(tracer);
 }
 
@@ -782,6 +869,8 @@ function syncHud() {
   $("wave-pill").textContent = mission.wave ? `WAVE ${mission.wave} / 3` : "WAVE — / 3";
   $("cell-pill").textContent = `CELLS ${mission.cells} / 3`;
   $("xp-pill").textContent = `XP ${mission.xp}`;
+  const hits = $("hit-pill");
+  if (hits) hits.textContent = `HITS ${hitCount}`;
   $("btn-use").classList.toggle("ready", !!interact);
   const target = currentTarget();
   const marker = $("marker");
