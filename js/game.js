@@ -394,8 +394,8 @@ function update(dt) {
 }
 
 function updateCamera(dt) {
-  const shoulder = 1.45;
-  const dist = 3.7;
+  const shoulder = 1.15;
+  const dist = 2.8;
   const forward = new THREE.Vector3(Math.sin(camYaw), 0, Math.cos(camYaw));
   const right = new THREE.Vector3(forward.z, 0, -forward.x);
   const lookDir = new THREE.Vector3(
@@ -408,7 +408,7 @@ function updateCamera(dt) {
   const desired = head.clone()
     .addScaledVector(forward, -dist)
     .addScaledVector(right, shoulder)
-    .add(new THREE.Vector3(0, 1.35, 0));
+    .add(new THREE.Vector3(0, 0.55, 0));
   const dir = desired.clone().sub(head);
   const len = dir.length();
   dir.normalize();
