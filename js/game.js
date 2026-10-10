@@ -108,9 +108,9 @@ async function boot() {
     };
     window.S9.frameClose = () => {
       player.state = "aim";
-      const head = player.pos.clone().add(new THREE.Vector3(0, 1.45, 0));
-      camera.position.set(player.pos.x + 0.7, 1.7, player.pos.z + 1.6);
-      camera.lookAt(head.x - 0.15, 1.35, player.pos.z - 4);
+      const head = player.pos.clone().add(new THREE.Vector3(0, 1.4, 0));
+      camera.position.set(player.pos.x + 1.1, 2.15, player.pos.z + 3.4);
+      camera.lookAt(head.x - 0.2, 1.25, player.pos.z - 10);
     };
     if (location.hash === "#test") {
       window.S9.debug = {
@@ -391,6 +391,7 @@ function update(dt) {
 
   const moving = move.lengthSq() > 0.01;
   player.state = player.hp <= 0 ? "dead" : player.dodgeT > 0 ? "dodge" : player.reloadT > 0 ? "reload" : player.fireCd > 0.12 ? "shoot" : (input.firing() ? "aim" : moving ? (sprint ? "sprint" : "move") : "idle");
+  if (window.S9 && window.S9.holdCam) player.state = player.fireCd > 0.12 ? "shoot" : "aim";
   animateGhost(ghost.parts, player.state, clock.elapsedTime, moving && player.dodgeT <= 0);
   if (player.state === "aim" || player.state === "shoot") {
     alignWeapon(ghost.parts, crosshairAimPoint(), recoil);
@@ -410,6 +411,7 @@ function update(dt) {
 }
 
 function updateCamera(dt) {
+  if (window.S9 && window.S9.holdCam) return;
   const shoulder = 0.85;
   const dist = 2.15;
   const forward = new THREE.Vector3(Math.sin(camYaw), 0, Math.cos(camYaw));
@@ -726,7 +728,7 @@ function spawnFlash(pos) {
   );
   burst.position.copy(pos);
   scene.add(light, burst);
-  flashes.push({ light, burst, life: 0.07 });
+  flashes.push({ light, burst, life: 0.16 });
 }
 
 function spawnTracer(from, to) {
@@ -743,7 +745,7 @@ function spawnTracer(from, to) {
   mesh.position.copy(from).addScaledVector(dir.normalize(), len * 0.5);
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
   tracer = mesh;
-  tracer.userData.life = 0.09;
+  tracer.userData.life = 0.16;
   scene.add(tracer);
 }
 
